@@ -507,17 +507,7 @@ bool CompilationDelegateMPS::CompileReshape(
   DLOG(INFO) << "CompilationImplMPS::CompileReshape";
   DLOG_IF(FATAL, reshape->type != mojom::RESHAPE);
 
-  uint32_t reshape_input_idx = reshape->inputs[0];
-  uint32_t reshape_output_idx = reshape->outputs[0];
-  for (size_t i = 0; i < compiled_model_->operations_.size(); ++i) {
-    OperationMac& operation = compiled_model_->operations_[i];
-    if (operation.inputs[0] == reshape_output_idx) {
-      DLOG(INFO) << "  Connect op " << i << " type " << operation.type
-                 << " input from " << operation.inputs[0] << " to "
-                 << reshape_input_idx;
-      operation.inputs[0] = reshape_input_idx;
-    }
-  }
+  image_nodes[reshape->outputs[0]] = image_nodes[reshape->inputs[0]];
   return true;
 }
 
