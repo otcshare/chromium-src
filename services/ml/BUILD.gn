@@ -29,8 +29,11 @@ source_set("ie") {
     "execution_impl_ie.cc",
     "execution_impl_ie.h",
   ]
-  include_dirs =
-      [ "//third_party/libinference_engine/dldt/inference-engine/include/" ]
+
+  include_dirs =[
+    "//third_party/libinference_engine/dldt/inference-engine/include/",
+    "//third_party/libinference_engine/dldt/ngraph/src",
+  ]
 
   configs -= [ "//build/config/compiler:no_exceptions" ]
   configs += [ "//build/config/compiler:exceptions" ]
