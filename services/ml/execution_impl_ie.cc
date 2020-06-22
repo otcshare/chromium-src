@@ -138,7 +138,14 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
       DLOG(INFO) << "Mapping " << mapping.get() << " for input " << i
                  << " offset " << offset << " length " << length;
       std::string input_id = base::NumberToString(operand->index);
-      ie::Blob::Ptr input_blob = infer_request->GetBlob(input_id);
+
+      ie::InputsDataMap inputInfo = compilation_-> network_->getInputsInfo();
+        if (inputInfo.size() != 1) {
+            throw std::logic_error("supports topologies only with 1 input");
+        }
+      auto inputInfoItem = *inputInfo.begin();
+      ie::Blob::Ptr input_blob = infer_request->GetBlob(inputInfoItem.first);
+
       float* dst =
           input_blob->buffer()
               .as<ie::PrecisionTrait<ie::Precision::FP32>::value_type*>();
@@ -169,7 +176,14 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
       DLOG(INFO) << "Mapping " << mapping.get() << " for output " << i
                  << " offset " << offset << " length " << length;
       std::string output_id = base::NumberToString(operand->index);
-      const ie::Blob::Ptr output_blob = infer_request->GetBlob(output_id);
+
+      ie::OutputsDataMap outputInfo = compilation_-> network_->getOutputsInfo();
+        if (outputInfo.size() != 1) {
+            throw std::logic_error("supports topologies only with 1 output");
+        }
+      auto outputInfoItem = *outputInfo.begin();
+      ie::Blob::Ptr output_blob = infer_request->GetBlob(outputInfoItem.first);
+
       const float* src =
           output_blob->buffer()
               .as<ie::PrecisionTrait<ie::Precision::FP32>::value_type*>();

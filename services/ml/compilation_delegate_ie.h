@@ -23,6 +23,19 @@ class Network;
 }
 }  // namespace InferenceEngine
 
+namespace ngraph {
+// ParameterVector;
+// ResultVector;
+class Function;
+class Node;
+namespace op {
+namespace v0 {
+class Parameter;
+class Result;
+}
+}
+}
+
 namespace ml {
 
 bool GNADevice();
@@ -45,7 +58,7 @@ class CompilationDelegateIe : public CompilationDelegate {
                          bool nhwc_to_nchw = true);
   static int32_t GetDims(const std::vector<uint32_t>&, std::vector<size_t>&);
   int32_t Init();
-  int32_t BuildNetwork();
+  int32_t CreateNgraphFunction();
   int32_t CreateBlob(uint32_t index,
                      std::shared_ptr<InferenceEngine::Blob>& blob);
   int32_t AddInput(uint32_t index);
@@ -72,6 +85,12 @@ class CompilationDelegateIe : public CompilationDelegate {
   std::unique_ptr<InferenceEngine::CNNNetwork> network_;
 
   std::map<uint32_t, size_t> layer_id_map_;
+  std::shared_ptr<ngraph::Function> ngraph_function_;
+  std::map<uint32_t, std::shared_ptr<ngraph::Node>> index_op_map_;
+  // ngraph::ParameterVector inputs;
+  // ngraph::ResultVector outputs;
+  std::vector<std::shared_ptr<ngraph::op::v0::Parameter>> inputs;
+  std::vector<std::shared_ptr<ngraph::op::v0::Result>> outputs;
 
   DISALLOW_COPY_AND_ASSIGN(CompilationDelegateIe);
 };
