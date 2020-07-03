@@ -235,6 +235,10 @@ int32_t CompilationDelegateIe::CreateBlob(
     DLOG(INFO) << "Create blob with size " << blob->size()
                << " for operand index " << index;
     if (fp32_precision) {
+      if (operand->type == mojom::TENSOR_QUANT8_ASYMM) {
+      DLOG(INFO) << "Operands with U8 precision are not supported now";
+      return mojom::BAD_DATA;
+      }
       float* dst = blob->buffer().as<float*>();
       auto mapping = compilation_->MapMemory(index);
       const float* src = reinterpret_cast<const float*>(mapping.get());
