@@ -1,0 +1,267 @@
+From 7e387bd1afe09be010bb4fcabc3d551965118e81 Mon Sep 17 00:00:00 2001
+From: mingming <mingming1.xu@intel.com>
+Date: Mon, 22 Jun 2020 15:28:59 +0800
+Subject: [PATCH] [IE] Add ngraph sigmoid op for testing
+
+---
+ services/ml/compilation_delegate_ie.cc | 94 +++++++++-----------------
+ services/ml/compilation_delegate_ie.h  | 21 +++++-
+ services/ml/execution_impl_ie.cc       | 18 ++++-
+ 3 files changed, 68 insertions(+), 65 deletions(-)
+
+diff --git a/services/ml/compilation_delegate_ie.cc b/services/ml/compilation_delegate_ie.cc
+index 0b02c5bd5860..96097e19869a 100644
+--- a/services/ml/compilation_delegate_ie.cc
++++ b/services/ml/compilation_delegate_ie.cc
+@@ -14,10 +14,16 @@
+ #include "third_party/libinference_engine/dldt/inference-engine/include/ie_builders.hpp"
+ #include "third_party/libinference_engine/dldt/inference-engine/include/inference_engine.hpp"
+ 
++#include "third_party/libinference_engine/dldt/ngraph/src/ngraph/opsets/opset.hpp"
++#include "third_party/libinference_engine/dldt/ngraph/src/ngraph/opsets/opset1.hpp"
++#include "third_party/libinference_engine/dldt/ngraph/src/ngraph/ngraph.hpp"
++
+ namespace ie = InferenceEngine;
+ 
+ namespace ml {
+ 
++using namespace ngraph;
++
+ namespace {
+ static float asfloat(uint32_t v) {
+   union {
+@@ -81,7 +87,8 @@ CompilationDelegateIe::CompilationDelegateIe(const CompilationImpl* compilation)
+     : CompilationDelegate(),
+       compilation_(compilation),
+       builder_(nullptr),
+-      network_(nullptr) {}
++      network_(nullptr),
++      ngraph_function_(nullptr) {}
+ 
+ CompilationDelegateIe::~CompilationDelegateIe() {
+   DLOG(INFO) << "CompilationDelegateIe::~CompilationDelegateIe()";
+@@ -95,7 +102,7 @@ int32_t CompilationDelegateIe::Compile() {
+     return result;
+   }
+ 
+-  result = BuildNetwork();
++  result = CreateNgraphFunction();
+   if (result != mojom::NOT_ERROR) {
+     return result;
+   }
+@@ -129,17 +136,10 @@ int32_t CompilationDelegateIe::Init() {
+   return mojom::NOT_ERROR;
+ }
+ 
+-int32_t CompilationDelegateIe::BuildNetwork() {
+-  try {
+-    builder_.reset(new ie::Builder::Network("webnn"));
+-    DLOG(INFO) << "[IE] succeed to create network";
+-  } catch (const std::exception& ex) {
+-    LOG(ERROR) << "[IE] exception " << ex.what();
+-    return mojom::OP_FAILED;
+-  }
+-
++int32_t CompilationDelegateIe::CreateNgraphFunction() {
+   int32_t result;
+   const mojom::ModelInfoPtr& model = compilation_->GetModel();
++
+   for (size_t i = 0; i < model->inputs.size(); ++i) {
+     result = AddInput(model->inputs[i]);
+     if (result != mojom::NOT_ERROR) {
+@@ -159,22 +159,6 @@ int32_t CompilationDelegateIe::BuildNetwork() {
+     int32_t result = mojom::NOT_ERROR;
+     if (type == mojom::ADD || type == mojom::MUL) {
+       result = AddElementwise(operation);
+-    } else if (type == mojom::CONV_2D || type == mojom::DEPTHWISE_CONV_2D ||
+-               type == mojom::ATROUS_CONV_2D ||
+-               type == mojom::ATROUS_DEPTHWISE_CONV_2D) {
+-      result = AddConvolution(operation);
+-    } else if (type == mojom::AVERAGE_POOL_2D || type == mojom::MAX_POOL_2D) {
+-      result = AddPooling(operation);
+-    } else if (type == mojom::SOFTMAX) {
+-      result = AddSoftmax(operation);
+-    } else if (type == mojom::RESHAPE) {
+-      result = AddReshape(operation);
+-    } else if (type == mojom::CONCATENATION) {
+-      result = AddConcatenation(operation);
+-    } else if (type == mojom::FULLY_CONNECTED) {
+-      result = AddFullyConnected(operation);
+-    } else if (type == mojom::RESIZE_BILINEAR) {
+-      result = AddResizeBilinear(operation);
+     } else if (type == mojom::LOGISTIC) {
+       result = AddSigmoid(operation);
+     } else {
+@@ -195,9 +179,10 @@ int32_t CompilationDelegateIe::BuildNetwork() {
+   }
+ 
+   try {
+-    network_.reset(new ie::CNNNetwork(
+-        ie::Builder::convertToICNNNetwork(builder_->build())));
+-    DLOG(INFO) << "[IE] succeed to build network";
++    ngraph_function_ = std::make_shared<Function>(outputs, inputs);
++    network_.reset(new ie::CNNNetwork(ngraph_function_));
++    DLOG(INFO) << "[IE] succeed to creat ngraph";
++    LOG(ERROR) << "[IE] succeed to creat ngraph";
+ 
+     ie::InputsDataMap input_info(network_->getInputsInfo());
+     DLOG(INFO) << "[IE] inputs data map size " << input_info.size();
+@@ -384,13 +369,13 @@ int32_t CompilationDelegateIe::AddInput(uint32_t index) {
+   if (result != mojom::NOT_ERROR) {
+     return result;
+   }
+-  std::string name(base::NumberToString(index));
+   try {
+-    size_t layer_id = builder_->addLayer(
+-        ie::Builder::InputLayer(name).setPort(ie::Port(dims)));
+-    layer_id_map_[index] = layer_id;
+-    DLOG(INFO) << "[IE] succeed to add input layer id " << layer_id
+-               << " for operand index " << index << " with dims "
++    auto arg =
++    std::make_shared<op::v0::Parameter>(element::f32, Shape(dims));
++    index_op_map_[index] = arg;
++    inputs.push_back(arg);
++    DLOG(INFO) << "[IE] succeed to add input layer for operand index "
++               << index << " with dims "
+                << VectorToString(dims.data(), dims.size());
+   } catch (const std::exception& ex) {
+     LOG(ERROR) << "[IE] failed to add input layer " << ex.what();
+@@ -402,20 +387,12 @@ int32_t CompilationDelegateIe::AddInput(uint32_t index) {
+ 
+ int32_t CompilationDelegateIe::AddOutput(uint32_t index) {
+   DLOG(INFO) << "AddOutput for operand index " << index;
+-  if (layer_id_map_.find(index) == layer_id_map_.end()) {
+-    LOG(ERROR) << "Layer for output index " << index << " is not ready";
+-    return mojom::BAD_DATA;
+-  }
+-  const size_t input_layer_id = layer_id_map_[index];
+-  DLOG(INFO) << "[IE] input port layer id " << input_layer_id
+-             << " for operand index " << index;
+-  std::string name(base::NumberToString(index));
+-  name += std::string("_out");
+   try {
+-    size_t output_id =
+-        builder_->addLayer({{input_layer_id}}, ie::Builder::OutputLayer(name));
+-    DLOG(INFO) << "[IE] succeed to add output layer id " << output_id
+-               << " for operand index " << index;
++    auto arg =
++    std::make_shared<op::v0::Result>(index_op_map_[index]);
++    outputs.push_back(arg);
++    DLOG(INFO) << "[IE] succeed to add output layer for operand index "
++               << index;
+   } catch (const std::exception& ex) {
+     LOG(ERROR) << "[IE] failed to add output layer " << ex.what();
+     return mojom::OP_FAILED;
+@@ -944,21 +921,14 @@ int32_t CompilationDelegateIe::AddResizeBilinear(
+ int32_t CompilationDelegateIe::AddSigmoid(
+     const mojom::OperationPtr& operation) {
+   const uint32_t input_index = operation->inputs[0];
+-  if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
+-    LOG(ERROR) << "The layer for operand index " << input_index
+-               << " is not ready";
+-    return mojom::BAD_DATA;
+-  }
+   try {
+     const uint32_t output_index = operation->outputs[0];
+-    std::string name(base::NumberToString(output_index));
+-    const size_t input_layer_id = layer_id_map_[input_index];
+-    DLOG(INFO) << "[IE] input port layer id " << input_layer_id
+-               << " for operand index " << input_index;
+-    size_t layer_id =
+-        builder_->addLayer({{input_layer_id}}, ie::Builder::SigmoidLayer(name));
+-    layer_id_map_[output_index] = layer_id;
+-    DLOG(INFO) << "[IE] succeed to add sigmoid layer id " << layer_id
++    DLOG(INFO) << "[IE] add ngraph sigmoid"
++               << " whose input operand index is " << input_index;
++    auto arg =
++    std::make_shared<op::v0::Sigmoid>(index_op_map_[operation->inputs[0]]);
++    index_op_map_[output_index] = arg;
++    DLOG(INFO) << "[IE] succeed to add ngraph sigmoid "
+                << " for output operand index " << output_index;
+   } catch (const std::exception& ex) {
+     LOG(ERROR) << "[IE] failed to add sigmoid layer " << ex.what();
+diff --git a/services/ml/compilation_delegate_ie.h b/services/ml/compilation_delegate_ie.h
+index 0f7e80e84076..8f092d2f1cd9 100644
+--- a/services/ml/compilation_delegate_ie.h
++++ b/services/ml/compilation_delegate_ie.h
+@@ -23,6 +23,19 @@ class Network;
+ }
+ }  // namespace InferenceEngine
+ 
++namespace ngraph {
++// ParameterVector;
++// ResultVector;
++class Function;
++class Node;
++namespace op {
++namespace v0 {
++class Parameter;
++class Result;
++}
++}
++}
++
+ namespace ml {
+ 
+ bool GNADevice();
+@@ -45,7 +58,7 @@ class CompilationDelegateIe : public CompilationDelegate {
+                          bool nhwc_to_nchw = true);
+   static int32_t GetDims(const std::vector<uint32_t>&, std::vector<size_t>&);
+   int32_t Init();
+-  int32_t BuildNetwork();
++  int32_t CreateNgraphFunction();
+   int32_t CreateBlob(uint32_t index,
+                      std::shared_ptr<InferenceEngine::Blob>& blob);
+   int32_t AddInput(uint32_t index);
+@@ -72,6 +85,12 @@ class CompilationDelegateIe : public CompilationDelegate {
+   std::unique_ptr<InferenceEngine::CNNNetwork> network_;
+ 
+   std::map<uint32_t, size_t> layer_id_map_;
++  std::shared_ptr<ngraph::Function> ngraph_function_;
++  std::map<uint32_t, std::shared_ptr<ngraph::Node>> index_op_map_;
++  // ngraph::ParameterVector inputs;
++  // ngraph::ResultVector outputs;
++  std::vector<std::shared_ptr<ngraph::op::v0::Parameter>> inputs;
++  std::vector<std::shared_ptr<ngraph::op::v0::Result>> outputs;
+ 
+   DISALLOW_COPY_AND_ASSIGN(CompilationDelegateIe);
+ };
+diff --git a/services/ml/execution_impl_ie.cc b/services/ml/execution_impl_ie.cc
+index 9ba0fc8ba6b6..15b43a6db093 100644
+--- a/services/ml/execution_impl_ie.cc
++++ b/services/ml/execution_impl_ie.cc
+@@ -138,7 +138,14 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
+       DLOG(INFO) << "Mapping " << mapping.get() << " for input " << i
+                  << " offset " << offset << " length " << length;
+       std::string input_id = base::NumberToString(operand->index);
+-      ie::Blob::Ptr input_blob = infer_request->GetBlob(input_id);
++
++      ie::InputsDataMap inputInfo = compilation_-> network_->getInputsInfo();
++        if (inputInfo.size() != 1) {
++            throw std::logic_error("supports topologies only with 1 input");
++        }
++      auto inputInfoItem = *inputInfo.begin();
++      ie::Blob::Ptr input_blob = infer_request->GetBlob(inputInfoItem.first);
++
+       float* dst =
+           input_blob->buffer()
+               .as<ie::PrecisionTrait<ie::Precision::FP32>::value_type*>();
+@@ -169,7 +176,14 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
+       DLOG(INFO) << "Mapping " << mapping.get() << " for output " << i
+                  << " offset " << offset << " length " << length;
+       std::string output_id = base::NumberToString(operand->index);
+-      const ie::Blob::Ptr output_blob = infer_request->GetBlob(output_id);
++
++      ie::OutputsDataMap outputInfo = compilation_-> network_->getOutputsInfo();
++        if (outputInfo.size() != 1) {
++            throw std::logic_error("supports topologies only with 1 output");
++        }
++      auto outputInfoItem = *outputInfo.begin();
++      ie::Blob::Ptr output_blob = infer_request->GetBlob(outputInfoItem.first);
++
+       const float* src =
+           output_blob->buffer()
+               .as<ie::PrecisionTrait<ie::Precision::FP32>::value_type*>();
+-- 
+2.26.0
+
