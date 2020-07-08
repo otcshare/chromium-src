@@ -124,6 +124,8 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
     InferenceEngine::InferRequest* infer_request =
         preference_ == mojom::PREFER_ULTRA_LOW_POWER ? s_gna_infer_request.get()
                                                      : infer_request_.get();
+    ie::InputsDataMap inputInfo = compilation_->network_->getInputsInfo();
+    auto it = inputInfo.begin();
     for (size_t i = 0; i < params_->inputs.size(); ++i) {
       const mojom::OperandInfoPtr& operand = params_->inputs[i];
       const uint32_t offset = total_length;
@@ -139,13 +141,14 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
                  << " offset " << offset << " length " << length;
       std::string input_id = base::NumberToString(operand->index);
 
-      ie::InputsDataMap inputInfo = compilation_-> network_->getInputsInfo();
-        if (inputInfo.size() != 1) {
-            throw std::logic_error("supports topologies only with 1 input");
-        }
-      auto inputInfoItem = *inputInfo.begin();
-      ie::Blob::Ptr input_blob = infer_request->GetBlob(inputInfoItem.first);
+      ie::InputsDataMap inputInfo = compilation_->network_->getInputsInfo();
+      // if (inputInfo.size() != 1) {
+      //     throw std::logic_error("supports topologies only with 1 input");
+      // }
 
+      DLOG(INFO) << "inputInfoItem.first: " << it->first;
+      ie::Blob::Ptr input_blob = infer_request->GetBlob(it->first);
+      it++;
       float* dst =
           input_blob->buffer()
               .as<ie::PrecisionTrait<ie::Precision::FP32>::value_type*>();
@@ -177,10 +180,10 @@ void ExecutionImplIe::StartCompute(StartComputeCallback callback) {
                  << " offset " << offset << " length " << length;
       std::string output_id = base::NumberToString(operand->index);
 
-      ie::OutputsDataMap outputInfo = compilation_-> network_->getOutputsInfo();
-        if (outputInfo.size() != 1) {
-            throw std::logic_error("supports topologies only with 1 output");
-        }
+      ie::OutputsDataMap outputInfo = compilation_->network_->getOutputsInfo();
+      if (outputInfo.size() != 1) {
+        throw std::logic_error("supports topologies only with 1 output");
+      }
       auto outputInfoItem = *outputInfo.begin();
       ie::Blob::Ptr output_blob = infer_request->GetBlob(outputInfoItem.first);
 

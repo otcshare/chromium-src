@@ -14,10 +14,9 @@
 #include "third_party/libinference_engine/dldt/inference-engine/include/ie_builders.hpp"
 #include "third_party/libinference_engine/dldt/inference-engine/include/inference_engine.hpp"
 
+#include "third_party/libinference_engine/dldt/ngraph/src/ngraph/ngraph.hpp"
 #include "third_party/libinference_engine/dldt/ngraph/src/ngraph/opsets/opset.hpp"
 #include "third_party/libinference_engine/dldt/ngraph/src/ngraph/opsets/opset1.hpp"
-#include "third_party/libinference_engine/dldt/ngraph/src/ngraph/ngraph.hpp"
-
 namespace ie = InferenceEngine;
 
 namespace ml {
@@ -135,11 +134,26 @@ int32_t CompilationDelegateIe::Init() {
   DLOG(INFO) << "[IE] inference engine build number " << version->buildNumber;
   return mojom::NOT_ERROR;
 }
+// void test(){
+//     auto param0 = std::make_shared<op::Parameter>(element::f32, Shape{64, 3,
+//     100}); auto param1 = std::make_shared<op::Parameter>(element::f32,
+//     Shape{128, 3, 10}); auto conv = std::make_shared<op::Convolution>(param0,
+//     param1);
+//     // LOG(ERROR) << "Only 1 output is supported";
+//     // EXPECT_EQ(conv->get_element_type(), element::f32);
+//     // EXPECT_EQ(conv->get_shape(), (Shape{64, 128, 91}));
 
+//     // EXPECT_EQ(conv->get_window_movement_strides(), Strides{1});
+//     // EXPECT_EQ(conv->get_window_dilation_strides(), Strides{1});
+//     // EXPECT_EQ(conv->get_data_dilation_strides(), Strides{1});
+
+//     // EXPECT_EQ(conv->get_padding_below(), CoordinateDiff{0});
+//     // EXPECT_EQ(conv->get_padding_above(), CoordinateDiff{0});
+// }
 int32_t CompilationDelegateIe::CreateNgraphFunction() {
   int32_t result;
   const mojom::ModelInfoPtr& model = compilation_->GetModel();
-
+  // test();
   for (size_t i = 0; i < model->inputs.size(); ++i) {
     result = AddInput(model->inputs[i]);
     if (result != mojom::NOT_ERROR) {
@@ -159,6 +173,10 @@ int32_t CompilationDelegateIe::CreateNgraphFunction() {
     int32_t result = mojom::NOT_ERROR;
     if (type == mojom::ADD || type == mojom::MUL) {
       result = AddElementwise(operation);
+    } else if (type == mojom::CONV_2D || type == mojom::DEPTHWISE_CONV_2D ||
+               type == mojom::ATROUS_CONV_2D ||
+               type == mojom::ATROUS_DEPTHWISE_CONV_2D) {
+      result = AddConvolution(operation);
     } else if (type == mojom::LOGISTIC) {
       result = AddSigmoid(operation);
     } else {
@@ -188,6 +206,7 @@ int32_t CompilationDelegateIe::CreateNgraphFunction() {
     DLOG(INFO) << "[IE] inputs data map size " << input_info.size();
     for (auto itr : input_info) {
       if (itr.second->getLayout() == ie::Layout::NCHW) {
+        DLOG(INFO) << "itr.second->setLayout(ie::Layout::NHWC) ";
         itr.second->setLayout(ie::Layout::NHWC);
       }
       itr.second->setPrecision(ie::Precision::FP32);
@@ -203,6 +222,7 @@ int32_t CompilationDelegateIe::CreateNgraphFunction() {
     for (auto itr : output_info) {
       ie::SizeVector dims = itr.second->getTensorDesc().getDims();
       if (itr.second->getLayout() == ie::Layout::NCHW) {
+        DLOG(INFO) << "itr.second->setLayout(ie::Layout::NHWC) ";
         itr.second->setLayout(ie::Layout::NHWC);
       }
       itr.second->setPrecision(ie::Precision::FP32);
@@ -365,18 +385,23 @@ int32_t CompilationDelegateIe::AddInput(uint32_t index) {
   const mojom::ModelInfoPtr& model = compilation_->GetModel();
   const mojom::OperandPtr& operand = model->operands[index];
   ie::SizeVector dims;
+  // ie::SizeVector dimensions;
+  // DLOG(INFO) << "[IE]input original dimensions: " ;
+  // for(size_t i = 0; i < operand->dimensions.size(); i++) {
+  //   dimensions[i] = operand->dimensions[i];
+  // }
+  // DLOG(INFO) << "[IE]input original dimensions: "
+  // << VectorToString(dimensions.data(), dimensions.size());
   int32_t result = GetDims(operand->dimensions, dims);
   if (result != mojom::NOT_ERROR) {
     return result;
   }
   try {
-    auto arg =
-    std::make_shared<op::v0::Parameter>(element::f32, Shape(dims));
-    index_op_map_[index] = arg;
-    inputs.push_back(arg);
-    DLOG(INFO) << "[IE] succeed to add input layer for operand index "
-               << index << " with dims "
-               << VectorToString(dims.data(), dims.size());
+    auto input = std::make_shared<op::Parameter>(element::f32, Shape(dims));
+    index_op_map_[index] = input;
+    inputs.push_back(input);
+    DLOG(INFO) << "[IE] succeed to add input layer for operand index " << index
+               << " with dims " << VectorToString(dims.data(), dims.size());
   } catch (const std::exception& ex) {
     LOG(ERROR) << "[IE] failed to add input layer " << ex.what();
     return mojom::OP_FAILED;
@@ -388,9 +413,8 @@ int32_t CompilationDelegateIe::AddInput(uint32_t index) {
 int32_t CompilationDelegateIe::AddOutput(uint32_t index) {
   DLOG(INFO) << "AddOutput for operand index " << index;
   try {
-    auto arg =
-    std::make_shared<op::v0::Result>(index_op_map_[index]);
-    outputs.push_back(arg);
+    auto output = std::make_shared<op::Result>(index_op_map_[index]);
+    outputs.push_back(output);
     DLOG(INFO) << "[IE] succeed to add output layer for operand index "
                << index;
   } catch (const std::exception& ex) {
@@ -417,14 +441,15 @@ int32_t CompilationDelegateIe::AddConstant(uint32_t index) {
     if (result != mojom::NOT_ERROR) {
       return result;
     }
-    size_t layer_id = builder_->addLayer(
-        ie::Builder::ConstLayer(name).setPort(ie::Port(dims)).setData(blob));
-    layer_id_map_[index] = layer_id;
-    DLOG(INFO) << "[IE] succeed to add const layer id " << layer_id
-               << " for operand index " << index << " with dims "
-               << VectorToString(dims.data(), dims.size());
+    DLOG(INFO) << "[IE] add ngraph Constant";
+    float* dst = blob->buffer().as<float*>();
+    auto constant =
+        std::make_shared<op::Constant>(element::f32, Shape(dims), dst);
+    index_op_map_[index] = constant;
+    DLOG(INFO) << "[IE] succeed to add ngraph Constant "
+               << " for operand index " << index;
   } catch (const std::exception& ex) {
-    LOG(ERROR) << "[IE] failed to add const layer " << ex.what();
+    LOG(ERROR) << "[IE] failed to add ngraph Constant layer " << ex.what();
     return mojom::OP_FAILED;
   }
   DLOG(INFO) << "AddConstant ends";
@@ -476,20 +501,18 @@ int32_t CompilationDelegateIe::AddElementwise(
   DLOG(INFO) << "    fuse_code: " << params.fuse_code;
 
   // Check boardcasting
-  const mojom::ModelInfoPtr& model = compilation_->GetModel();
-  const mojom::OperandPtr& input0 = model->operands[operation->inputs[0]];
-  const mojom::OperandPtr& input1 = model->operands[operation->inputs[1]];
-  if (input0->dimensions != input1->dimensions) {
-    LOG(ERROR) << "Boardcasting is not supported";
-    return mojom::BAD_DATA;
-  }
+  // const mojom::ModelInfoPtr& model = compilation_->GetModel();
+  // const mojom::OperandPtr& input0 = model->operands[operation->inputs[0]];
+  // const mojom::OperandPtr& input1 = model->operands[operation->inputs[1]];
+  // if (input0->dimensions != input1->dimensions) {
+  //   LOG(ERROR) << "Boardcasting is not supported";
+  //   return mojom::BAD_DATA;
+  // }
 
   // Binary op
-  std::vector<ie::PortInfo> input_port_infos;
-  std::vector<ie::Port> input_ports;
   for (size_t i = 0; i < 2; ++i) {
     const uint32_t input_index = operation->inputs[i];
-    if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
+    if (index_op_map_.find(input_index) == index_op_map_.end()) {
       // Setup constants
       const mojom::ModelInfoPtr& model = compilation_->GetModel();
       if (model->values.find(base::NumberToString(input_index)) !=
@@ -504,46 +527,30 @@ int32_t CompilationDelegateIe::AddElementwise(
         return mojom::BAD_DATA;
       }
     }
-    const size_t layer_id = layer_id_map_[input_index];
-    input_port_infos.push_back({layer_id});
-    input_ports.push_back(builder_->getLayer(layer_id)->getOutputPorts()[0]);
-    DLOG(INFO) << "[IE] input " << i << " layer id " << layer_id
-               << " operand index " << input_index;
-  }
-  const uint32_t output_index = operation->outputs[0];
-  std::string output_name(base::NumberToString(output_index));
-  std::string name(output_name);
-  if (params.fuse_code != mojom::FUSED_NONE) {
-    name = name + "_pre_fuse";
-  }
-  ie::Builder::EltwiseLayer::EltwiseType type;
-  if (operation->type == mojom::ADD) {
-    type = ie::Builder::EltwiseLayer::SUM;
-  } else if (operation->type == mojom::MUL) {
-    type = ie::Builder::EltwiseLayer::MUL;
-  } else {
-    LOG(ERROR) << "Operation type " << operation->type << " is not supported";
-    return mojom::BAD_DATA;
   }
   try {
-    size_t layer_id =
-        builder_->addLayer(input_port_infos, ie::Builder::EltwiseLayer(name)
-                                                 .setInputPorts(input_ports)
-                                                 .setEltwiseType(type));
-    DLOG(INFO) << "[IE] succeed to add eltwise layer id " << layer_id
-               << " for output operand index " << output_index << " with type "
-               << type;
-
-    if (params.fuse_code != mojom::FUSED_NONE) {
-      result = AddActivationByFusedCode(params.fuse_code, layer_id, output_name,
-                                        layer_id);
-      if (result != mojom::NOT_ERROR) {
-        return result;
-      }
+    const uint32_t output_index = operation->outputs[0];
+    if (operation->type == mojom::ADD) {
+      DLOG(INFO) << "[IE] add ngraph Add"
+                 << " for output operand index " << output_index;
+      auto add =
+          std::make_shared<op::v1::Add>(index_op_map_[operation->inputs[0]],
+                                        index_op_map_[operation->inputs[1]]);
+      index_op_map_[output_index] = add;
+    } else if (operation->type == mojom::MUL) {
+      DLOG(INFO) << "[IE] add ngraph Multiply";
+      auto mul = std::make_shared<op::v1::Multiply>(
+          index_op_map_[operation->inputs[0]],
+          index_op_map_[operation->inputs[1]]);
+      index_op_map_[output_index] = mul;
+      DLOG(INFO) << "[IE] succeed to add ngraph Multiply "
+                 << " for output operand index " << output_index;
+    } else {
+      LOG(ERROR) << "Operation type " << operation->type << " is not supported";
+      return mojom::BAD_DATA;
     }
-    layer_id_map_[output_index] = layer_id;
   } catch (const std::exception& ex) {
-    LOG(ERROR) << "[IE] failed to add eltwise layer " << ex.what();
+    LOG(ERROR) << "[IE] failed to add elementwise layer " << ex.what();
     return mojom::OP_FAILED;
   }
   DLOG(INFO) << "AddElementwise ends.";
@@ -557,6 +564,35 @@ int32_t CompilationDelegateIe::AddConvolution(
   int32_t result = compilation_->GetConvParams(operation, params);
   if (result != mojom::NOT_ERROR)
     return result;
+
+  // for (size_t i = 0; i < 2; ++i) {
+  //   const uint32_t input_index = operation->inputs[i];
+  //   if (index_op_map_.find(input_index) == index_op_map_.end()) {
+  //     // Setup constants
+  //     const mojom::ModelInfoPtr& model = compilation_->GetModel();
+  //     if (model->values.find(base::NumberToString(input_index)) !=
+  //         model->values.end()) {
+  //       result = AddConstant(input_index);
+  //       if (result != mojom::NOT_ERROR) {
+  //         return result;
+  //       }
+  //     } else {
+  //       LOG(ERROR) << "The layer for operand index " << input_index
+  //                  << " is not ready";
+  //       return mojom::BAD_DATA;
+  //     }
+  //   }
+  // }
+  std::vector<ptrdiff_t> padBegin{params.padding_top, params.padding_left};
+  std::vector<ptrdiff_t> padEnd{params.padding_bottom, params.padding_right};
+  std::vector<size_t> strides{params.stride_height, params.stride_width};
+  std::vector<size_t> dilations{params.dilation_height, params.dilation_width};
+
+  const uint32_t input_index = operation->inputs[0];
+  const uint32_t weights_index = operation->inputs[1];
+  const uint32_t bias_index = operation->inputs[2];
+  const uint32_t output_index = operation->outputs[0];
+
   if (params.depthwise) {
     if (params.depthwise_multiplier != 1) {
       LOG(ERROR) << "depthwise_multiplier " << params.depthwise_multiplier
@@ -573,64 +609,69 @@ int32_t CompilationDelegateIe::AddConvolution(
           << params.input_channel;
       return mojom::BAD_DATA;
     }
-  }
-
-  const uint32_t input_index = operation->inputs[0];
-  if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
-    LOG(ERROR) << "The layer for operand index " << input_index
-               << " is not ready";
-    return mojom::BAD_DATA;
-  }
-  try {
-    const uint32_t output_index = operation->outputs[0];
-    std::string output_name(base::NumberToString(output_index));
-    std::string name(output_name);
-    if (params.fuse_code != mojom::FUSED_NONE) {
-      name = name + "_pre_fuse";
+    //
+    if (params.depth_out == params.input_batch) {
+      DLOG(INFO) << "Use GroupConvolution to implement depthwiseConv now";
     }
-    const uint32_t weights_index = operation->inputs[1];
-    ie::Blob::Ptr weights;
-    result = CreateBlob(weights_index, weights);
+    //  else{
+    //   LOG(ERROR) << "[IE] failed to add depthwiseConv layer " ;
+    //   return mojom::OP_FAILED;
+    // }
+    const mojom::ModelInfoPtr& model = compilation_->GetModel();
+    const mojom::OperandPtr& operand = model->operands[weights_index];
+    ie::SizeVector dims;
+    int32_t result = GetDims(operand->dimensions, dims);
     if (result != mojom::NOT_ERROR) {
       return result;
     }
-    size_t weights_id =
-        builder_->addLayer(ie::Builder::ConstLayer("weights").setData(weights));
-    const uint32_t bias_index = operation->inputs[2];
-    ie::Blob::Ptr bias;
-    result = CreateBlob(bias_index, bias);
-    if (result != mojom::NOT_ERROR) {
-      return result;
-    }
-    size_t biases_id =
-        builder_->addLayer(ie::Builder::ConstLayer("biases").setData(bias));
-    const size_t input_layer_id = layer_id_map_[input_index];
-    DLOG(INFO) << "[IE] input port layer id " << input_layer_id
-               << " for operand index " << input_index;
-    size_t layer_id = builder_->addLayer(
-        {{input_layer_id}, {weights_id}, {biases_id}},
-        ie::Builder::ConvolutionLayer(name)
-            .setKernel({params.filter_height, params.filter_width})
-            .setGroup(params.depthwise ? params.depth_out : 1)
-            .setOutDepth(params.depth_out)
-            .setDilation({params.dilation_width, params.dilation_height})
-            .setStrides({params.stride_width, params.stride_height})
-            .setPaddingsBegin({params.padding_top, params.padding_left})
-            .setPaddingsEnd({params.padding_bottom, params.padding_right}));
-    if (params.fuse_code != mojom::FUSED_NONE) {
-      result = AddActivationByFusedCode(params.fuse_code, layer_id, output_name,
-                                        layer_id);
+    try {
+      ie::Blob::Ptr blob;
+      result = CreateBlob(weights_index, blob);
       if (result != mojom::NOT_ERROR) {
         return result;
       }
+      DLOG(INFO) << "[IE] add ngraph Constant";
+      float* dst = blob->buffer().as<float*>();
+      ie::SizeVector weights_dims{params.depth_out, 1, 1, params.filter_height,
+                                  params.filter_width};
+      DLOG(INFO) << "[IE] add weights";
+      auto weights = std::make_shared<op::Constant>(element::f32,
+                                                    Shape(weights_dims), dst);
+      DLOG(INFO) << "[IE] succeed to add ngraph Constant "
+                 << " for operand index " << weights_index;
+      DLOG(INFO) << "[IE] add bias";
+      AddConstant(bias_index);
+      DLOG(INFO) << "[IE] add ngraph GroupConvolution";
+      auto conv = std::make_shared<op::v1::GroupConvolution>(
+          index_op_map_[input_index], weights, Strides(strides),
+          CoordinateDiff(padBegin), CoordinateDiff(padEnd), Strides(dilations));
+      // auto add =
+      // std::make_shared<op::v1::Add>(conv,index_op_map_[bias_index]);
+      index_op_map_[output_index] = conv;
+    } catch (const std::exception& ex) {
+      LOG(ERROR) << "[IE] failed to add Convolution layer " << ex.what();
+      return mojom::OP_FAILED;
     }
-    layer_id_map_[output_index] = layer_id;
-    DLOG(INFO) << "[IE] succeed to add convolution layer id " << layer_id
-               << " for output operand index " << output_index;
-  } catch (const std::exception& ex) {
-    LOG(ERROR) << "[IE] failed to add convolution layer " << ex.what();
-    return mojom::OP_FAILED;
+  } else {
+    try {
+      DLOG(INFO) << "[IE] add ngraph Convolution";
+      DLOG(INFO) << "[IE] add weights";
+      AddConstant(weights_index);
+      DLOG(INFO) << "[IE] add bias";
+      AddConstant(bias_index);
+      auto conv = std::make_shared<op::v1::Convolution>(
+          index_op_map_[input_index], index_op_map_[weights_index],
+          Strides(strides), CoordinateDiff(padBegin), CoordinateDiff(padEnd),
+          Strides(dilations));
+      auto add = std::make_shared<op::v1::Add>(conv, index_op_map_[bias_index]);
+      index_op_map_[output_index] = add;
+    } catch (const std::exception& ex) {
+      LOG(ERROR) << "[IE] failed to add Convolution layer " << ex.what();
+      return mojom::OP_FAILED;
+    }
   }
+  DLOG(INFO) << "[IE] succeed to add ngraph convolution for operand index "
+             << output_index;
   return mojom::NOT_ERROR;
 }
 
@@ -920,14 +961,12 @@ int32_t CompilationDelegateIe::AddResizeBilinear(
 
 int32_t CompilationDelegateIe::AddSigmoid(
     const mojom::OperationPtr& operation) {
-  const uint32_t input_index = operation->inputs[0];
   try {
     const uint32_t output_index = operation->outputs[0];
-    DLOG(INFO) << "[IE] add ngraph sigmoid"
-               << " whose input operand index is " << input_index;
-    auto arg =
-    std::make_shared<op::v0::Sigmoid>(index_op_map_[operation->inputs[0]]);
-    index_op_map_[output_index] = arg;
+    DLOG(INFO) << "[IE] add ngraph sigmoid";
+    auto sigmoid =
+        std::make_shared<op::v0::Sigmoid>(index_op_map_[operation->inputs[0]]);
+    index_op_map_[output_index] = sigmoid;
     DLOG(INFO) << "[IE] succeed to add ngraph sigmoid "
                << " for output operand index " << output_index;
   } catch (const std::exception& ex) {

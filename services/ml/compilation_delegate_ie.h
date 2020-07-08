@@ -32,9 +32,9 @@ namespace op {
 namespace v0 {
 class Parameter;
 class Result;
-}
-}
-}
+}  // namespace v0
+}  // namespace op
+}  // namespace ngraph
 
 namespace ml {
 
@@ -58,6 +58,7 @@ class CompilationDelegateIe : public CompilationDelegate {
                          bool nhwc_to_nchw = true);
   static int32_t GetDims(const std::vector<uint32_t>&, std::vector<size_t>&);
   int32_t Init();
+  // void test();
   int32_t CreateNgraphFunction();
   int32_t CreateBlob(uint32_t index,
                      std::shared_ptr<InferenceEngine::Blob>& blob);
