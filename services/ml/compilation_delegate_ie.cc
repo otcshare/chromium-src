@@ -179,6 +179,8 @@ int32_t CompilationDelegateIe::CreateNgraphFunction() {
       result = AddConvolution(operation);
     } else if (type == mojom::LOGISTIC) {
       result = AddSigmoid(operation);
+    } else if (type == mojom::RESHAPE) {
+      result = AddReshape(operation);
     } else {
       LOG(ERROR) << "Operation type " << type << " is not supported.";
       return mojom::BAD_DATA;
@@ -617,13 +619,6 @@ int32_t CompilationDelegateIe::AddConvolution(
     //   LOG(ERROR) << "[IE] failed to add depthwiseConv layer " ;
     //   return mojom::OP_FAILED;
     // }
-    const mojom::ModelInfoPtr& model = compilation_->GetModel();
-    const mojom::OperandPtr& operand = model->operands[weights_index];
-    ie::SizeVector dims;
-    int32_t result = GetDims(operand->dimensions, dims);
-    if (result != mojom::NOT_ERROR) {
-      return result;
-    }
     try {
       ie::Blob::Ptr blob;
       result = CreateBlob(weights_index, blob);
@@ -765,15 +760,10 @@ int32_t CompilationDelegateIe::AddSoftmax(
 
 int32_t CompilationDelegateIe::AddReshape(
     const mojom::OperationPtr& operation) {
-  const uint32_t input_index = operation->inputs[0];
-  if (layer_id_map_.find(input_index) == layer_id_map_.end()) {
-    LOG(ERROR) << "The layer for operand index " << input_index
-               << " is not ready";
-    return mojom::BAD_DATA;
-  }
   try {
     const uint32_t output_index = operation->outputs[0];
     const mojom::ModelInfoPtr& model = compilation_->GetModel();
+    const uint32_t shape_index = operation->inputs[1];
     const mojom::OperandPtr& output = model->operands[output_index];
     ie::SizeVector dims;
     int32_t result = GetDims(output->dimensions, dims);
@@ -781,16 +771,23 @@ int32_t CompilationDelegateIe::AddReshape(
       return result;
     }
     std::vector<int> cdims;
-    for (auto d : dims)
+    for (auto d : dims) {
       cdims.push_back(static_cast<int>(d));
-    std::string name(base::NumberToString(output_index));
-    const size_t input_layer_id = layer_id_map_[input_index];
-    DLOG(INFO) << "[IE] input port layer id " << input_layer_id
-               << " for operand index " << input_index;
-    size_t layer_id = builder_->addLayer(
-        {{input_layer_id}}, ie::Builder::ReshapeLayer(name).setDims(cdims));
-    layer_id_map_[output_index] = layer_id;
-    DLOG(INFO) << "[IE] succeed to add reshape layer id " << layer_id
+    }
+    DLOG(INFO) << "[IE] add shape constant";
+    auto shape = std::make_shared<op::Constant>(
+        element::i64, Shape{output->dimensions.size()}, cdims);
+    DLOG(INFO) << "[IE] succeed to add ngraph Constant "
+               << " for operand index " << shape_index;
+
+    DLOG(INFO) << "[IE] add ngraph reshape";
+    auto Reshape = std::make_shared<op::v1::Reshape>(
+        index_op_map_[operation->inputs[0]], shape, true);
+    LOG(INFO) << "[IE] output_shape for ngraph reshape: "
+              << Reshape->get_output_shape(0);
+
+    index_op_map_[output_index] = Reshape;
+    DLOG(INFO) << "[IE] succeed to add ngraph reshape "
                << " for output operand index " << output_index;
   } catch (const std::exception& ex) {
     LOG(ERROR) << "[IE] failed to add reshape layer " << ex.what();
