@@ -11,6 +11,11 @@ interface NNContext {
     Operand add(Operand primary, Operand secondary);
     Operand mul(Operand primary, Operand secondary);
 
+    [RaisesException] Operand conv2d(Operand input, Operand filter,
+                optional sequence<long> padding = [], optional sequence<long> strides = [],
+                optional sequence<long> dilations = [], optional long groups = 1,
+                optional OperandLayout layout = "nchw");
+
     // Create Model
     [CallWith=ScriptState] Promise<Model> createModel(sequence<NamedOperand> outputs);
 };

@@ -9,6 +9,8 @@
 #include "services/ml/public/mojom/constants.mojom-blink.h"
 #include "third_party/blink/renderer/core/dom/document.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
+#include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/modules/ml/neural_network_context.h"
 #include "third_party/blink/renderer/modules/ml/v2/nn_compilation.h"
 #include "third_party/blink/renderer/modules/ml/v2/nn_context.h"
@@ -143,10 +145,27 @@ void NNModel::FinishCreatingModel(NamedOperandVector* outputs) {
   return;
 }
 
-void NNModel::AddFuseOperand() {
+void NNModel::AddScalarOperand(uint32_t index, int value) {
   model_info_->operands.push_back(ml::mojom::blink::Operand::New(
       static_cast<int32_t>(NeuralNetworkContext::kInt32),
       WTF::Vector<uint32_t>(), 0, 0));
+
+  // setOperandValue
+  NotShared<DOMArrayBufferView> data =
+      NotShared<DOMArrayBufferView>(DOMInt32Array::Create(&value, 1));
+  SetOperandValue(index, data.View());
+}
+
+void NNModel::AddBiasOperand(uint32_t index, uint32_t output_channel) {
+  model_info_->operands.push_back(ml::mojom::blink::Operand::New(
+      static_cast<int32_t>(NeuralNetworkContext::kTensorFloat32),
+      WTF::Vector<uint32_t>(1, output_channel), 0, 0));
+
+  // setOperandValue
+  Vector<float> value(output_channel, 0);
+  NotShared<DOMArrayBufferView> data = NotShared<DOMArrayBufferView>(
+      DOMFloat32Array::Create(value.data(), output_channel));
+  SetOperandValue(index, data.View());
 }
 
 void NNModel::AddUnspecifiedOperand() {

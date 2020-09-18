@@ -20,6 +20,8 @@ blink_modules_sources("v2") {
     "ops/binary.h",
     "ops/constant.cc",
     "ops/constant.h",
+    "ops/conv.cc",
+    "ops/conv.h",
     "ops/input.cc",
     "ops/input.h",
     "ops/output.cc",

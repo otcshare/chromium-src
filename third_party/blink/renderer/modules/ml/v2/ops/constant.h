@@ -18,6 +18,7 @@ class Constant final : public Operand {
   ~Constant() override = default;
 
   void AddLayer(NNModel* model, uint32_t& index) override;
+  Vector<uint32_t> GetDimensions() override;
 
   // Interface required by garbage collection.
   void Trace(Visitor*) const override;

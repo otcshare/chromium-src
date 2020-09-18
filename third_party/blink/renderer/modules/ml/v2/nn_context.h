@@ -26,6 +26,8 @@ class NavigatorML;
 
 using NamedOperandVector = HeapVector<Member<NamedOperand>>;
 
+int32_t product(const WTF::Vector<int32_t>&);
+
 class NNContext final : public ScriptWrappable,
                         public ExecutionContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
@@ -42,6 +44,14 @@ class NNContext final : public ScriptWrappable,
                     ExceptionState&);
   Operand* add(Operand*, Operand*);
   Operand* mul(Operand*, Operand*);
+  Operand* conv2d(Operand*,
+                  Operand*,
+                  WTF::Vector<int32_t>,
+                  WTF::Vector<int32_t>,
+                  WTF::Vector<int32_t>,
+                  int32_t,
+                  String,
+                  ExceptionState&);
   ScriptPromise createModel(ScriptState*, const NamedOperandVector&);
 
   // ExecutionContextLifecycleObserver overrides.

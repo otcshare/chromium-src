@@ -22,6 +22,10 @@ void Constant::AddLayer(NNModel* model, uint32_t& index) {
   model->SetOperandValue(constant_index, data_);
 }
 
+Vector<uint32_t> Constant::GetDimensions() {
+  return descriptor_->dimensions();
+}
+
 void Constant::Trace(Visitor* visitor) const {
   visitor->Trace(descriptor_);
   visitor->Trace(data_);

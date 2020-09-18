@@ -26,6 +26,7 @@ class Operand : public ScriptWrappable {
   // be copied to Mojo::ModelInfo->memory which is total memory, and map
   // input/output name to index that will be used in execution phase.
   virtual void AddLayer(NNModel* model, uint32_t& index);
+  virtual Vector<uint32_t> GetDimensions();
 
   void SetIndex(uint32_t index);
   uint32_t Index();

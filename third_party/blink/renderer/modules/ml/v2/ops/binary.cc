@@ -4,8 +4,6 @@
 
 #include "third_party/blink/renderer/modules/ml/v2/ops/binary.h"
 
-#include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer.h"
-#include "third_party/blink/renderer/core/typed_arrays/dom_typed_array.h"
 #include "third_party/blink/renderer/modules/ml/neural_network_context.h"
 #include "third_party/blink/renderer/platform/heap/heap_allocator.h"
 #include "third_party/blink/renderer/platform/wtf/vector.h"
@@ -18,12 +16,7 @@ Binary::Binary(BinaryType type, Operand* primary, Operand* secondary)
 void Binary::AddLayer(NNModel* model, uint32_t& index) {
   // Add FuseCode Operand defined in Android NN API.
   uint32_t fuse_index = index++;
-  model->AddFuseOperand();
-  // setOperandValue
-  int32_t fuse_code = 0;
-  NotShared<DOMArrayBufferView> fuse_data =
-      NotShared<DOMArrayBufferView>(DOMInt32Array::Create(&fuse_code, 1));
-  model->SetOperandValue(fuse_index, fuse_data.View());
+  model->AddScalarOperand(fuse_index, 0);
 
   // Add element-wise binary output operand.
   uint32_t output_index = index++;

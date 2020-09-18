@@ -16,10 +16,19 @@
 #include "third_party/blink/renderer/modules/ml/v2/nn_model.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/binary.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/constant.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/conv.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/input.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 
 namespace blink {
+
+int32_t product(const WTF::Vector<int32_t>& dims) {
+  uint32_t prod = 1;
+  for (auto dim : dims)
+    prod *= dim;
+
+  return prod;
+}
 
 namespace {
 
@@ -138,6 +147,30 @@ Operand* NNContext::add(Operand* primary, Operand* secondary) {
 
 Operand* NNContext::mul(Operand* primary, Operand* secondary) {
   return MakeGarbageCollected<Binary>(kBinaryTypeMul, primary, secondary);
+}
+
+Operand* NNContext::conv2d(Operand* input,
+                           Operand* filter,
+                           WTF::Vector<int32_t> padding,
+                           WTF::Vector<int32_t> strides,
+                           WTF::Vector<int32_t> dilations,
+                           int32_t groups,
+                           String layout,
+                           ExceptionState& state) {
+  Vector<int32_t> valid_padding =
+      padding.IsEmpty() ? Vector<int32_t>(4, 0) : std::move(padding);
+  Vector<int32_t> valid_strides =
+      strides.IsEmpty() ? Vector<int32_t>(2, 1) : std::move(strides);
+  Vector<int32_t> valid_dilations =
+      dilations.IsEmpty() ? Vector<int32_t>(2, 1) : std::move(dilations);
+  if (product(valid_padding) < 0 || product(valid_strides) <= 0 ||
+      product(valid_dilations) <= 0 || groups == 0) {
+    InvalidData(state);
+    return nullptr;
+  }
+  return MakeGarbageCollected<Conv>(input, filter, std::move(valid_padding),
+                                    std::move(valid_strides),
+                                    std::move(valid_dilations), groups, layout);
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,

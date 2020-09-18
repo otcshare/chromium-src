@@ -21,6 +21,10 @@ void Operand::AddLayer(NNModel* model, uint32_t& index) {
   LOG(INFO) << "Operand.";
 }
 
+Vector<uint32_t> Operand::GetDimensions() {
+  return Vector<uint32_t>();
+}
+
 void Operand::SetIndex(uint32_t index) {
   index_ = index;
 }
