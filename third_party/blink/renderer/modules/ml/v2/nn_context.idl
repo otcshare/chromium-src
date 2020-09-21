@@ -7,7 +7,7 @@ interface NNContext {
     [RaisesException] Operand input(DOMString name, OperandDescriptor desc);
     [RaisesException] Operand constant(OperandDescriptor desc, [AllowShared] ArrayBufferView data);
 
-    // element-wise binary operatioins.
+    // element-wise binary operations.
     Operand add(Operand primary, Operand secondary);
     Operand mul(Operand primary, Operand secondary);
 
@@ -15,6 +15,14 @@ interface NNContext {
                 optional sequence<long> padding = [], optional sequence<long> strides = [],
                 optional sequence<long> dilations = [], optional long groups = 1,
                 optional OperandLayout layout = "nchw");
+
+    // Pooling operations.
+    [RaisesException] Operand averagePool2d(Operand input, optional sequence<long> windowDimensions = [],
+                        optional sequence<long> padding = [], optional sequence<long> strides = [],
+                        optional sequence<long> dilations = [], optional OperandLayout layout = "nchw");
+    [RaisesException] Operand maxPool2d(Operand input, optional sequence<long> windowDimensions = [],
+                        optional sequence<long> padding = [], optional sequence<long> strides = [],
+                        optional sequence<long> dilations = [], optional OperandLayout layout = "nchw");
 
     // Create Model
     [CallWith=ScriptState] Promise<Model> createModel(sequence<NamedOperand> outputs);

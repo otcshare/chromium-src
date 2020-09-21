@@ -23,7 +23,7 @@ void Binary::AddLayer(NNModel* model, uint32_t& index) {
   Operand::SetIndex(output_index);
   model->AddUnspecifiedOperand();
   // addOperation
-  int32_t operation_type = 100;
+  int32_t operation_type = -1;
   switch (type_) {
     case kBinaryTypeAdd:
       operation_type = NeuralNetworkContext::kAdd;

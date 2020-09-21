@@ -52,6 +52,20 @@ class NNContext final : public ScriptWrappable,
                   int32_t,
                   String,
                   ExceptionState&);
+  Operand* averagePool2d(Operand*,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         String,
+                         ExceptionState&);
+  Operand* maxPool2d(Operand*,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     String,
+                     ExceptionState&);
   ScriptPromise createModel(ScriptState*, const NamedOperandVector&);
 
   // ExecutionContextLifecycleObserver overrides.

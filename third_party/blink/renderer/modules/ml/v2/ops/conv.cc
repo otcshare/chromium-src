@@ -7,7 +7,6 @@
 #include <memory>
 
 #include "third_party/blink/renderer/modules/ml/neural_network_context.h"
-#include "third_party/blink/renderer/modules/ml/v2/ops/constant.h"
 
 namespace blink {
 
