@@ -19,6 +19,8 @@
 #include "third_party/blink/renderer/modules/ml/v2/ops/conv.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/input.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/pooling.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/reshape.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/softmax.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 
 namespace blink {
@@ -215,6 +217,14 @@ Operand* NNContext::maxPool2d(Operand* input,
   return MakeGarbageCollected<Pooling>(
       input, std::move(window_dimensions), std::move(padding),
       std::move(strides), std::move(dilations), layout, kPoolingTypeMax);
+}
+
+Operand* NNContext::reshape(Operand* input, WTF::Vector<int32_t> new_shape) {
+  return MakeGarbageCollected<Reshape>(input, std::move(new_shape));
+}
+
+Operand* NNContext::softmax(Operand* input) {
+  return MakeGarbageCollected<Softmax>(input);
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,

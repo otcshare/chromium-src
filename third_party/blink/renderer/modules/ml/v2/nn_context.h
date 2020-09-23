@@ -66,6 +66,8 @@ class NNContext final : public ScriptWrappable,
                      WTF::Vector<int32_t>,
                      String,
                      ExceptionState&);
+  Operand* reshape(Operand*, WTF::Vector<int32_t>);
+  Operand* softmax(Operand*);
   ScriptPromise createModel(ScriptState*, const NamedOperandVector&);
 
   // ExecutionContextLifecycleObserver overrides.

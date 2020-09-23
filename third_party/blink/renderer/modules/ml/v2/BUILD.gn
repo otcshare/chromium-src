@@ -30,6 +30,8 @@ blink_modules_sources("v2") {
     "ops/pooling.h",
     "ops/reshape.cc",
     "ops/reshape.h",
+    "ops/softmax.cc",
+    "ops/softmax.h",
   ]
 
   public_deps = [
