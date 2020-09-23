@@ -28,6 +28,8 @@ blink_modules_sources("v2") {
     "ops/output.h",
     "ops/pooling.cc",
     "ops/pooling.h",
+    "ops/reshape.cc",
+    "ops/reshape.h",
   ]
 
   public_deps = [

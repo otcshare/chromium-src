@@ -33,6 +33,9 @@ class NNModel final : public ScriptWrappable {
   void BuildNeuralNetworkModel(Operand*);
   void AddScalarOperand(uint32_t index, int value);
   void AddBiasOperand(uint32_t index, uint32_t output_channel);
+  void AddTensorOperand(uint32_t index,
+                        Vector<uint32_t> dimensions,
+                        Vector<int32_t> value);
   void AddUnspecifiedOperand();
   void AddOperand(const OperandDescriptor* descriptor);
   void SetOperandValue(uint32_t index, DOMArrayBufferView* data);

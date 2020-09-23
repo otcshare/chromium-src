@@ -145,6 +145,8 @@ void NNModel::FinishCreatingModel(NamedOperandVector* outputs) {
   return;
 }
 
+// Types not prefaced by ANEURALNETWORKS_TENSOR_* represent scalar values and
+// must have no dimensions.
 void NNModel::AddScalarOperand(uint32_t index, int value) {
   model_info_->operands.push_back(ml::mojom::blink::Operand::New(
       static_cast<int32_t>(NeuralNetworkContext::kInt32),
@@ -156,6 +158,8 @@ void NNModel::AddScalarOperand(uint32_t index, int value) {
   SetOperandValue(index, data.View());
 }
 
+// Types prefaced with ANEURALNETWORKS_TENSOR_* must be used for tensor data
+// (i.e., tensors with at least one dimension).
 void NNModel::AddBiasOperand(uint32_t index, uint32_t output_channel) {
   model_info_->operands.push_back(ml::mojom::blink::Operand::New(
       static_cast<int32_t>(NeuralNetworkContext::kTensorFloat32),
@@ -165,6 +169,19 @@ void NNModel::AddBiasOperand(uint32_t index, uint32_t output_channel) {
   Vector<float> value(output_channel, 0);
   NotShared<DOMArrayBufferView> data = NotShared<DOMArrayBufferView>(
       DOMFloat32Array::Create(value.data(), output_channel));
+  SetOperandValue(index, data.View());
+}
+
+void NNModel::AddTensorOperand(uint32_t index,
+                               Vector<uint32_t> dimensions,
+                               Vector<int32_t> value) {
+  model_info_->operands.push_back(ml::mojom::blink::Operand::New(
+      static_cast<int32_t>(NeuralNetworkContext::kTensorInt32),
+      std::move(dimensions), 0, 0));
+
+  // setOperandValue
+  NotShared<DOMArrayBufferView> data = NotShared<DOMArrayBufferView>(
+      DOMInt32Array::Create(value.data(), value.size()));
   SetOperandValue(index, data.View());
 }
 
