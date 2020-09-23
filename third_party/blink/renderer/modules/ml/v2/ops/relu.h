@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_SOFTMAX_H_
-#define THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_SOFTMAX_H_
+#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_RELU_H_
+#define THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_RELU_H_
 
 #include "third_party/blink/renderer/modules/ml/v2/nn_model.h"
 #include "third_party/blink/renderer/modules/ml/v2/operand.h"
@@ -12,14 +12,14 @@
 
 namespace blink {
 
-class Softmax final : public Output {
+class Relu final : public Output {
  public:
-  explicit Softmax(Operand*);
-  ~Softmax() override = default;
+  explicit Relu(Operand*);
+  ~Relu() override = default;
 
   void AddLayer(NNModel* model, uint32_t& index) override;
 };
 
 }  // namespace blink
 
-#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_SOFTMAX_H_
+#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_ML_OPS_RELU_H_

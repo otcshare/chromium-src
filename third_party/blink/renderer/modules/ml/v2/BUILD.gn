@@ -28,6 +28,8 @@ blink_modules_sources("v2") {
     "ops/output.h",
     "ops/pooling.cc",
     "ops/pooling.h",
+    "ops/relu.cc",
+    "ops/relu.h",
     "ops/reshape.cc",
     "ops/reshape.h",
     "ops/softmax.cc",

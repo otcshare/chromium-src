@@ -19,6 +19,7 @@
 #include "third_party/blink/renderer/modules/ml/v2/ops/conv.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/input.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/pooling.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/relu.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/reshape.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/softmax.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
@@ -225,6 +226,10 @@ Operand* NNContext::reshape(Operand* input, WTF::Vector<int32_t> new_shape) {
 
 Operand* NNContext::softmax(Operand* input) {
   return MakeGarbageCollected<Softmax>(input);
+}
+
+Operand* NNContext::relu(Operand* input) {
+  return MakeGarbageCollected<Relu>(input);
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,

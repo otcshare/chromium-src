@@ -25,7 +25,8 @@ interface NNContext {
                         optional sequence<long> dilations = [], optional OperandLayout layout = "nchw");
 
     Operand reshape(Operand input, sequence<long> newShape);
-    Operand softmax(Operand x);
+    Operand softmax(Operand input);
+    Operand relu(Operand input);
 
     // Create Model
     [CallWith=ScriptState] Promise<Model> createModel(sequence<NamedOperand> outputs);
