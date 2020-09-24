@@ -18,6 +18,7 @@
 #include "third_party/blink/renderer/modules/ml/v2/ops/constant.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/conv.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/input.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/matmul.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/pooling.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/relu.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/reshape.h"
@@ -230,6 +231,10 @@ Operand* NNContext::softmax(Operand* input) {
 
 Operand* NNContext::relu(Operand* input) {
   return MakeGarbageCollected<Relu>(input);
+}
+
+Operand* NNContext::matmul(Operand* a, Operand* b) {
+  return MakeGarbageCollected<MatMul>(a, b);
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,

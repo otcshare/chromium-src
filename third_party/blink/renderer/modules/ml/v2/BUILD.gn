@@ -24,6 +24,8 @@ blink_modules_sources("v2") {
     "ops/conv.h",
     "ops/input.cc",
     "ops/input.h",
+    "ops/matmul.cc",
+    "ops/matmul.h",
     "ops/output.cc",
     "ops/output.h",
     "ops/pooling.cc",
