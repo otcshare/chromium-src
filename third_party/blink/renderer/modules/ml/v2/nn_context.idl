@@ -28,6 +28,7 @@ interface NNContext {
     Operand softmax(Operand input);
     Operand relu(Operand input);
     Operand matmul(Operand a, Operand b);
+    Operand transpose(Operand input, optional sequence<long> permutation=[]);
 
     // Create Model
     [CallWith=ScriptState] Promise<Model> createModel(sequence<NamedOperand> outputs);

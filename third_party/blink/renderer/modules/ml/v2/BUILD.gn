@@ -36,6 +36,8 @@ blink_modules_sources("v2") {
     "ops/reshape.h",
     "ops/softmax.cc",
     "ops/softmax.h",
+    "ops/transpose.cc",
+    "ops/transpose.h",
   ]
 
   public_deps = [

@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/modules/ml/v2/ops/relu.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/reshape.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/softmax.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/transpose.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 
 namespace blink {
@@ -235,6 +236,10 @@ Operand* NNContext::relu(Operand* input) {
 
 Operand* NNContext::matmul(Operand* a, Operand* b) {
   return MakeGarbageCollected<MatMul>(a, b);
+}
+
+Operand* NNContext::transpose(Operand* input, WTF::Vector<int32_t> new_shape) {
+  return MakeGarbageCollected<Transpose>(input, std::move(new_shape));
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,

@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/macros.h"
+#include "base/memory/scoped_refptr.h"
 #include "services/ml/common.h"
 #include "services/ml/compilation_impl_nn.h"
 #include "services/ml/model_impl_nn.h"
@@ -28,8 +29,7 @@ namespace ml {
 
 class ExecutionImplNN : public mojom::Execution {
  public:
-  ExecutionImplNN(const CompilationImplNN*,
-                       mojo::ScopedSharedBufferHandle);
+  ExecutionImplNN(const CompilationImplNN*, mojo::ScopedSharedBufferHandle);
   ~ExecutionImplNN() override;
 
   void StartCompute(mojom::UserBufferPtr user_buffer,
@@ -46,13 +46,11 @@ class ExecutionImplNN : public mojom::Execution {
   std::vector<std::unique_ptr<OperandInfo>> inputs_info_;
   std::vector<std::unique_ptr<OperandInfo>> outputs_info_;
   mojo::ScopedSharedBufferHandle memory_;
-
+  const CompilationImplNN* compilation_impl_;
 #if defined(OS_LINUX) || defined(OS_WIN)
-  ie_compilation_t* ie_compilation_;
   ie_execution_t* ie_execution_;
-#else
-  ANeuralNetworksCompilation* nn_compilation_;
 #endif
+
   DISALLOW_COPY_AND_ASSIGN(ExecutionImplNN);
 };
 
