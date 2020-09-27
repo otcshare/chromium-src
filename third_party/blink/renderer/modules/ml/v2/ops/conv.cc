@@ -96,7 +96,7 @@ void Conv::AddLayer(NNModel* model, uint32_t& index) {
 
   // Add layout operand and set the value.
   uint32_t layout_index = index++;
-  model->AddScalarOperand(layout_index, layout_ == "nchw" ? 1 : 0);
+  model->AddScalarOperand(layout_index, layout_ == "nchw" ? true : false);
   input_indexes.push_back(layout_index);
 
   // Add conv output operand.

@@ -169,6 +169,18 @@ void NNModel::AddScalarOperand(uint32_t index, float value) {
   SetOperandValue(index, data.View());
 }
 
+void NNModel::AddScalarOperand(uint32_t index, bool value) {
+  model_info_->operands.push_back(ml::mojom::blink::Operand::New(
+      static_cast<int32_t>(NeuralNetworkContext::kBool),
+      WTF::Vector<uint32_t>(), 0, 0));
+
+  // setOperandValue
+  int8_t convert = value ? 1 : 0;
+  NotShared<DOMArrayBufferView> data =
+      NotShared<DOMArrayBufferView>(DOMInt8Array::Create(&convert, 1));
+  SetOperandValue(index, data.View());
+}
+
 // Types prefaced with ANEURALNETWORKS_TENSOR_* must be used for tensor data
 // (i.e., tensors with at least one dimension).
 void NNModel::AddBiasOperand(uint32_t index, uint32_t output_channel) {
