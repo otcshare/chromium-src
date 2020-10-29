@@ -8,9 +8,12 @@
 #include <utility>
 
 #include "constants.h"
+#include "transpose_sinking.h"
 #include "utils.h"
 
 #include "ngraph/ngraph.hpp"
+#include "ngraph/pass/manager.hpp"
+#include "ngraph/pass/pass.hpp"
 namespace InferenceEngine {
 using namespace ngraph;
 namespace {
@@ -187,6 +190,13 @@ int32_t Compilation::Compile() {
     std::shared_ptr<ngraph::Function> ngraph_function;
     ngraph_function =
         std::make_shared<Function>(ngraph_outputs_, ngraph_inputs_);
+    // If the model only has one op, transpose_sinking will not needed.
+    if (model_->operations.size() > 1) {
+      ngraph::pass::Manager passes;
+      passes.register_pass<tensorflow::ngraph_bridge::pass::TransposeSinking>();
+      passes.run_passes(ngraph_function);
+    }
+
     network_.reset(new CNNNetwork(ngraph_function));
     InputsDataMap input_info(network_->getInputsInfo());
     for (auto itr : input_info) {
