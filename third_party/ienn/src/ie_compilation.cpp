@@ -190,8 +190,16 @@ int32_t Compilation::Compile() {
     network_.reset(new CNNNetwork(ngraph_function));
     InputsDataMap input_info(network_->getInputsInfo());
     for (auto itr : input_info) {
-      itr.second->setPrecision(Precision::FP32);
+       itr.second->setPrecision(Precision::U8);
+      //  std::cout << "Network input '" << itr.first << "' precision " << itr.second->getTensorDesc().getPrecision()
+      //                                                 << ", dimensions (" << itr.second->getTensorDesc().getLayout() << "): "<< std::endl;
     }
+    // OutputsDataMap output_info(network_->getOutputsInfo());
+    // for (auto itr : output_info) {
+    //   // itr.second->setPrecision(Precision::U8);
+    //    std::cout << "Network output '" << itr.first << "' precision " << itr.second->getTensorDesc().getPrecision()
+    //                                                   << ", dimensions (" << itr.second->getTensorDesc().getLayout() << "): "<< std::endl;
+    // }
   } catch (const std::exception& ex) {
     std::cout << "[IE] exception " << ex.what();
     return error_t::OP_FAILED;
