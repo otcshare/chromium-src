@@ -33,8 +33,11 @@ CompilationImplNN::CompilationImplNN(const ModelImplNN* model,
 }
 
 CompilationImplNN::~CompilationImplNN() {
-  // ANeuralNetworksCompilation_free(nn_compilation_);
-  // The nn_compilation_ will be deleted in execution phase.
+#if defined(OS_ANDROID)
+  ANeuralNetworksCompilation_free(nn_compilation_);
+#else
+  IE(ie_compilation_free)(ie_compilation_);
+#endif
 }
 
 void CompilationImplNN::Finish(int32_t preference, FinishCallback callback) {

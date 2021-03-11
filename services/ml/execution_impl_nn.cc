@@ -14,8 +14,6 @@
 
 namespace ml {
 
-// TODO:: CompilationImplNN* => std::unique<CompilationImplNN> so that
-// ie_compilation_free(ie_compilation_); can host in class CompilationImplNN.
 ExecutionImplNN::ExecutionImplNN(const CompilationImplNN* compilation,
                                  mojo::ScopedSharedBufferHandle memory)
     : operands_(compilation->operands_),
@@ -23,14 +21,10 @@ ExecutionImplNN::ExecutionImplNN(const CompilationImplNN* compilation,
       inputs_(compilation->inputs_),
       outputs_(compilation->outputs_),
       memory_(std::move(memory)),
-#if defined(OS_ANDROID)
-      nn_compilation_(compilation->nn_compilation_) {
-#else
-      ie_compilation_(compilation->ie_compilation_) {
-#endif
+      compilation_impl_(compilation) {
 #if defined(OS_LINUX) || defined(OS_WIN)
   // Create Execution
-  IE(ie_execution_create)(ie_compilation_, &ie_execution_);
+  IE(ie_execution_create)(compilation_impl_->ie_compilation_, &ie_execution_);
 #endif
   uint32_t total_length = 0;
   inputs_info_.reserve(inputs_.size());
@@ -54,9 +48,7 @@ ExecutionImplNN::ExecutionImplNN(const CompilationImplNN* compilation,
 
 ExecutionImplNN::~ExecutionImplNN() {
 #if defined(OS_ANDROID)
-  ANeuralNetworksCompilation_free(nn_compilation_);
 #else
-  IE(ie_compilation_free)(ie_compilation_);
   IE(ie_execution_free)(ie_execution_);
 #endif
   DLOG(INFO) << "ANeuralNetworksCompilation_free";
@@ -91,8 +83,8 @@ void ExecutionImplNN::StartCompute(mojom::UserBufferPtr user_buffer,
   int32_t result = 0;
 #if defined(OS_ANDROID)
   ANeuralNetworksExecution* nn_execution;
-  result =
-      ANeuralNetworksExecution_create(nn_compilation_, &nn_execution);
+  result = ANeuralNetworksExecution_create(compilation_impl_->nn_compilation_,
+                                           &nn_execution);
 #endif
   for (size_t i = 0; i < inputs_info_.size(); ++i) {
     std::unique_ptr<OperandInfo>& info = inputs_info_[i];
@@ -101,8 +93,8 @@ void ExecutionImplNN::StartCompute(mojom::UserBufferPtr user_buffer,
         nn_execution, i, NULL, static_cast<void*>(info->mapping.get()),
         info->length);
 #else
-    result = IE(ie_execution_set_input)(ie_execution_, i,
-                                        info->mapping.get(), info->length);
+    result = IE(ie_execution_set_input)(ie_execution_, i, info->mapping.get(),
+                                        info->length);
 #endif
   }
 
@@ -113,8 +105,8 @@ void ExecutionImplNN::StartCompute(mojom::UserBufferPtr user_buffer,
         nn_execution, i, NULL, static_cast<void*>(info->mapping.get()),
         info->length);
 #else
-    result = IE(ie_execution_set_output)(
-        ie_execution_, i, info->mapping.get(), info->length);
+    result = IE(ie_execution_set_output)(ie_execution_, i, info->mapping.get(),
+                                         info->length);
 #endif
   }
 

@@ -7,9 +7,28 @@ interface NNContext {
     [RaisesException] Operand input(DOMString name, OperandDescriptor desc);
     [RaisesException] Operand constant(OperandDescriptor desc, [AllowShared] ArrayBufferView data);
 
-    // element-wise binary operatioins.
+    // element-wise binary operations.
     Operand add(Operand primary, Operand secondary);
     Operand mul(Operand primary, Operand secondary);
+
+    [RaisesException] Operand conv2d(Operand input, Operand filter,
+                optional sequence<long> padding = [], optional sequence<long> strides = [],
+                optional sequence<long> dilations = [], optional long groups = 1,
+                optional OperandLayout layout = "nchw");
+
+    // Pooling operations.
+    [RaisesException] Operand averagePool2d(Operand input, optional sequence<long> windowDimensions = [],
+                        optional sequence<long> padding = [], optional sequence<long> strides = [],
+                        optional sequence<long> dilations = [], optional OperandLayout layout = "nchw");
+    [RaisesException] Operand maxPool2d(Operand input, optional sequence<long> windowDimensions = [],
+                        optional sequence<long> padding = [], optional sequence<long> strides = [],
+                        optional sequence<long> dilations = [], optional OperandLayout layout = "nchw");
+
+    Operand reshape(Operand input, sequence<long> newShape);
+    Operand softmax(Operand input);
+    Operand relu(Operand input);
+    Operand matmul(Operand a, Operand b);
+    Operand transpose(Operand input, optional sequence<long> permutation=[]);
 
     // Create Model
     [CallWith=ScriptState] Promise<Model> createModel(sequence<NamedOperand> outputs);

@@ -70,7 +70,7 @@ void NNCompilation::OnCreateExecution(
 
   if (result_code == ml::mojom::blink::NOT_ERROR) {
     resolver->Resolve(MakeGarbageCollected<NNExecution>(
-        std::move(init_params), std::move(name_index_)));
+        std::move(init_params), name_index_));
   } else {
     resolver->Reject(MakeGarbageCollected<DOMException>(
         DOMExceptionCode::kInvalidStateError,

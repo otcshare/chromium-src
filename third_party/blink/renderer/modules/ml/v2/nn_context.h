@@ -26,6 +26,8 @@ class NavigatorML;
 
 using NamedOperandVector = HeapVector<Member<NamedOperand>>;
 
+int32_t product(const WTF::Vector<int32_t>&);
+
 class NNContext final : public ScriptWrappable,
                         public ExecutionContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
@@ -42,7 +44,34 @@ class NNContext final : public ScriptWrappable,
                     ExceptionState&);
   Operand* add(Operand*, Operand*);
   Operand* mul(Operand*, Operand*);
+  Operand* conv2d(Operand*,
+                  Operand*,
+                  WTF::Vector<int32_t>,
+                  WTF::Vector<int32_t>,
+                  WTF::Vector<int32_t>,
+                  int32_t,
+                  String,
+                  ExceptionState&);
+  Operand* averagePool2d(Operand*,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         WTF::Vector<int32_t>,
+                         String,
+                         ExceptionState&);
+  Operand* maxPool2d(Operand*,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     WTF::Vector<int32_t>,
+                     String,
+                     ExceptionState&);
+  Operand* reshape(Operand*, WTF::Vector<int32_t>);
+  Operand* softmax(Operand*);
+  Operand* relu(Operand*);
+  Operand* matmul(Operand*, Operand*);
   ScriptPromise createModel(ScriptState*, const NamedOperandVector&);
+  Operand* transpose(Operand*, WTF::Vector<int32_t>);
 
   // ExecutionContextLifecycleObserver overrides.
   void ContextDestroyed() override;

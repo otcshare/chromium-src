@@ -16,10 +16,25 @@
 #include "third_party/blink/renderer/modules/ml/v2/nn_model.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/binary.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/constant.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/conv.h"
 #include "third_party/blink/renderer/modules/ml/v2/ops/input.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/matmul.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/pooling.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/relu.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/reshape.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/softmax.h"
+#include "third_party/blink/renderer/modules/ml/v2/ops/transpose.h"
 #include "third_party/blink/renderer/platform/bindings/exception_code.h"
 
 namespace blink {
+
+int32_t product(const WTF::Vector<int32_t>& dims) {
+  uint32_t prod = 1;
+  for (auto dim : dims)
+    prod *= dim;
+
+  return prod;
+}
 
 namespace {
 
@@ -104,6 +119,26 @@ bool InvalidOperandValue(const OperandDescriptor* descriptor,
   return invalid ? InvalidData(exception_state) : false;
 }
 
+bool InvalidStrides(WTF::Vector<int32_t>& padding,
+                    WTF::Vector<int32_t>& strides,
+                    WTF::Vector<int32_t>& dilations,
+                    ExceptionState& state) {
+  if (padding.IsEmpty()) {
+    padding = Vector<int32_t>(4, 0);
+  }
+  if (strides.IsEmpty()) {
+    strides = Vector<int32_t>(2, 1);
+  }
+  if (dilations.IsEmpty()) {
+    dilations = Vector<int32_t>(2, 1);
+  }
+  if (product(padding) < 0 || product(strides) <= 0 ||
+      product(dilations) <= 0) {
+    return InvalidData(state);
+  }
+  return false;
+}
+
 }  // namespace
 
 NNContext::NNContext(NavigatorML* navigator_ml)
@@ -138,6 +173,73 @@ Operand* NNContext::add(Operand* primary, Operand* secondary) {
 
 Operand* NNContext::mul(Operand* primary, Operand* secondary) {
   return MakeGarbageCollected<Binary>(kBinaryTypeMul, primary, secondary);
+}
+
+Operand* NNContext::conv2d(Operand* input,
+                           Operand* filter,
+                           WTF::Vector<int32_t> padding,
+                           WTF::Vector<int32_t> strides,
+                           WTF::Vector<int32_t> dilations,
+                           int32_t groups,
+                           String layout,
+                           ExceptionState& state) {
+  if (InvalidStrides(padding, strides, dilations, state))
+    return nullptr;
+  return MakeGarbageCollected<Conv>(input, filter, std::move(padding),
+                                    std::move(strides), std::move(dilations),
+                                    groups, layout);
+}
+
+Operand* NNContext::averagePool2d(Operand* input,
+                                  WTF::Vector<int32_t> window_dimensions,
+                                  WTF::Vector<int32_t> padding,
+                                  WTF::Vector<int32_t> strides,
+                                  WTF::Vector<int32_t> dilations,
+                                  String layout,
+                                  ExceptionState& state) {
+  if (InvalidStrides(padding, strides, dilations, state))
+    return nullptr;
+  if (window_dimensions.IsEmpty())
+    window_dimensions = WTF::Vector<int32_t>(2, 0);
+  return MakeGarbageCollected<Pooling>(
+      input, std::move(window_dimensions), std::move(padding),
+      std::move(strides), std::move(dilations), layout, kPoolingTypeAverage);
+}
+
+Operand* NNContext::maxPool2d(Operand* input,
+                              WTF::Vector<int32_t> window_dimensions,
+                              WTF::Vector<int32_t> padding,
+                              WTF::Vector<int32_t> strides,
+                              WTF::Vector<int32_t> dilations,
+                              String layout,
+                              ExceptionState& state) {
+  if (InvalidStrides(padding, strides, dilations, state))
+    return nullptr;
+  if (window_dimensions.IsEmpty())
+    window_dimensions = WTF::Vector<int32_t>(2, 0);
+  return MakeGarbageCollected<Pooling>(
+      input, std::move(window_dimensions), std::move(padding),
+      std::move(strides), std::move(dilations), layout, kPoolingTypeMax);
+}
+
+Operand* NNContext::reshape(Operand* input, WTF::Vector<int32_t> new_shape) {
+  return MakeGarbageCollected<Reshape>(input, std::move(new_shape));
+}
+
+Operand* NNContext::softmax(Operand* input) {
+  return MakeGarbageCollected<Softmax>(input);
+}
+
+Operand* NNContext::relu(Operand* input) {
+  return MakeGarbageCollected<Relu>(input);
+}
+
+Operand* NNContext::matmul(Operand* a, Operand* b) {
+  return MakeGarbageCollected<MatMul>(a, b);
+}
+
+Operand* NNContext::transpose(Operand* input, WTF::Vector<int32_t> new_shape) {
+  return MakeGarbageCollected<Transpose>(input, std::move(new_shape));
 }
 
 ScriptPromise NNContext::createModel(ScriptState* script_state,
