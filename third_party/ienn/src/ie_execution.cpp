@@ -126,18 +126,31 @@ int32_t Execution::StartCompute() {
     for (size_t i = 0; i < model->inputs.size(); ++i) {
       size_t index = model->inputs[i];
       const Operand& operand = model->operands[index];
-      if (operand.type != data_t::TENSOR_FLOAT32) {
-        std::cout << "Only TENSOR_FLOAT32 operand type is supported";
-        return error_t::BAD_DATA;
-      }
+      // if (operand.type != data_t::TENSOR_FLOAT32) {
+      //   std::cout << "Only TENSOR_FLOAT32 operand type is supported";
+      //   return error_t::BAD_DATA;
+      // }
       auto input_name =
           compilation_->index_op_map_[index].get_node()->get_name();
       Blob::Ptr input_blob = infer_request->GetBlob(input_name);
-      float* dst = input_blob->buffer()
-                       .as<PrecisionTrait<Precision::FP32>::value_type*>();
-      const float* src = reinterpret_cast<const float*>(input_data_[i].buffer);
+      uint8_t* dst = input_blob->buffer()
+                       .as<PrecisionTrait<Precision::U8>::value_type*>();
+      const uint8_t* src = reinterpret_cast<const uint8_t*>(input_data_[i].buffer);
+      // float* dst = input_blob->buffer()
+      //                  .as<PrecisionTrait<Precision::FP32>::value_type*>();
+      // const float* src = reinterpret_cast<const float*>(input_data_[i].buffer);
       memcpy(static_cast<void*>(dst), static_cast<const void*>(src),
              input_data_[i].length);
+            //  std::cout << "input_data_[i].length: "<< input_data_[i].length<<std::endl;
+    //     std::cout<<std::endl;
+    // std::cout<< "input_data src: --------------"<<std::endl;
+    // for(size_t i =0;i <20;i++)
+    // std::cout<< src[i]<<" ";
+    // std::cout<<std::endl;
+    //    std::cout<< "input_data dst: --------------"<<std::endl;
+    // for(size_t i =0;i <20;i++)
+    // std::cout<< dst[i]<<" ";
+    // std::cout<<std::endl;
     }
 
     infer_request->Infer();
