@@ -1,0 +1,15 @@
+// Copyright 2021 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// https://github.com/webmachinelearning/model-loader/blob/main/explainer.md
+
+[
+  RuntimeEnabled=MachineLearning,
+  Exposed=Window
+] interface MLModelLoader {
+  [CallWith=ScriptState, RaisesException] constructor(MLContext context);
+
+  [CallWith=ScriptState, RaisesException] Promise<MLModelLoaded>
+      load(ArrayBuffer buffer, MLLoadModelOptions options);
+};

@@ -1,0 +1,22 @@
+# Copyright 2021 The Chromium Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//third_party/blink/renderer/modules/modules.gni")
+
+blink_modules_sources("ml") {
+  sources = [
+    "ml.cc",
+    "ml.h",
+    "ml_context.cc",
+    "ml_context.h",
+    "ml_model_loaded.cc",
+    "ml_model_loaded.h",
+    "ml_model_loader.cc",
+    "ml_model_loader.h",
+    "ml_type_converters.cc",
+    "ml_type_converters.h",
+    "navigator_ml.cc",
+    "navigator_ml.h",
+  ]
+}

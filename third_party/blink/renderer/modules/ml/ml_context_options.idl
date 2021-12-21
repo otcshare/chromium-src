@@ -1,0 +1,37 @@
+.// Copyright 2021 The Chromium Authors. All rights reserved.
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+// https://github.com/webmachinelearning/model-loader/blob/main/explainer.md
+
+enum MLDevicePreference {
+  "default",
+  "gpu",
+  "cpu"
+};
+
+enum MLPowerPreference {
+  // Let the user agent select the most suitable behavior.
+  "default",
+  // Prioritizes execution speed over power consumption.
+  "high-performance",
+  // Prioritizes power consumption over other considerations such as execution
+  // speed.
+  "low-power",
+};
+
+enum MLModelFormat {
+  // Tensorflow-lite flatbuffer.
+  "tflite"
+};
+
+dictionary MLContextOptions {
+  // Preferred kind of device used.
+  MLDevicePreference devicePreference = "default";
+
+  // Preference as related to power consumption.
+  MLPowerPreference powerPreference = "default";
+
+  // Model format for the model loader API.
+  MLModelFormat modelFormat = "tflite";
+};
