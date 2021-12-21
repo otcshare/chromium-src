@@ -14,6 +14,9 @@
 #include "gpu/command_buffer/service/shared_image_backing.h"
 #include "gpu/gpu_gles2_export.h"
 #include "third_party/abseil-cpp/absl/types/optional.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
+
+#include <dawn_wire/WireServer.h>
 
 namespace gpu {
 class DXGISharedHandleManager;
@@ -135,6 +138,20 @@ class GPU_GLES2_EXPORT SharedImageManager {
   bool BeginBatchReadAccess();
   bool EndBatchReadAccess();
 
+  void SetDawnWireServer(CommandBufferId id, dawn_wire::WireServer* server) {
+    if (dawn_wire_server_map_.find(id) != dawn_wire_server_map_.end()) {
+      return;
+    }
+    dawn_wire_server_map_.insert(std::make_pair(id, server));
+  }
+
+  dawn_wire::WireServer* DawnWireServer(CommandBufferId id) {
+    if (dawn_wire_server_map_.find(id) == dawn_wire_server_map_.end()) {
+      return nullptr;
+    }
+    return dawn_wire_server_map_[id];
+  }
+
  private:
   class AutoLock;
   // The lock for protecting |images_|.
@@ -151,6 +168,8 @@ class GPU_GLES2_EXPORT SharedImageManager {
 #if BUILDFLAG(IS_WIN)
   scoped_refptr<DXGISharedHandleManager> dxgi_shared_handle_manager_;
 #endif
+  
+  std::map<CommandBufferId, dawn_wire::WireServer*> dawn_wire_server_map_;
 
   THREAD_CHECKER(thread_checker_);
 };

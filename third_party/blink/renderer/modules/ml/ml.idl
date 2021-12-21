@@ -9,9 +9,9 @@
 //     https://github.com/webmachinelearning/webnn/blob/main/explainer.md
 
 [
-  RuntimeEnabled=MachineLearningModelLoader,
-  Exposed=Window
+  RuntimeEnabled=WebGPU,
+  Exposed(Window WebGPU, Worker WebGPU)
 ] interface ML {
-  [CallWith=ScriptState, RaisesException]
-      Promise<MLContext> createContext(optional MLContextOptions options = {});
+    MLContext createContext(optional MLContextOptions options = {});
+    MLContext createContext(GPUDevice device);
 };

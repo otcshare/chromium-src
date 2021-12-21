@@ -276,6 +276,12 @@ target(link_target_type, "gles2_sources") {
     "webgpu_cmd_validation_implementation_autogen.h",
     "webgpu_decoder.cc",
     "webgpu_decoder.h",
+    "webnn_cmd_validation.cc",
+    "webnn_cmd_validation.h",
+    "webnn_cmd_validation_autogen.h",
+    "webnn_cmd_validation_implementation_autogen.h",
+    "webnn_decoder.cc",
+    "webnn_decoder.h",
     "wrapped_sk_image.cc",
     "wrapped_sk_image.h",
   ]
@@ -288,6 +294,8 @@ target(link_target_type, "gles2_sources") {
       "dawn_service_memory_transfer_service.h",
       "webgpu_decoder_impl.cc",
       "webgpu_decoder_impl.h",
+      "webnn_decoder_impl.cc",
+      "webnn_decoder_impl.h",
     ]
   }
 
@@ -296,6 +304,7 @@ target(link_target_type, "gles2_sources") {
     "//gpu:gpu_gles2_implementation",
     "//gpu:raster_implementation",
     "//gpu:webgpu_implementation",
+    "//gpu:webnn_implementation",
     "//third_party/khronos:khronos_headers",
   ]
 
@@ -309,6 +318,7 @@ target(link_target_type, "gles2_sources") {
     "//gpu/command_buffer/common:gles2_sources",
     "//gpu/command_buffer/common:raster_sources",
     "//gpu/command_buffer/common:webgpu_sources",
+    "//gpu/command_buffer/common:webnn_sources",
     "//skia",
     "//third_party/dawn/include/dawn:headers",
   ]
@@ -427,6 +437,11 @@ target(link_target_type, "gles2_sources") {
       ]
     }
   }
+
+  deps += [
+    "//third_party/webnn/src/webnn:webnn_proc",
+    "//third_party/webnn/src/webnn_native",
+  ]
 
   if (is_mac) {
     deps += [ "//components/viz/common:metal_context_provider" ]

@@ -44,6 +44,9 @@ void RecordContextLost(ContextType type, ContextLostReason reason) {
     case ContextType::WEBGPU:
       UMA_HISTOGRAM_ENUMERATION("GPU.ContextLost.WebGPU", reason);
       break;
+    case ContextType::WEBNN:
+      UMA_HISTOGRAM_ENUMERATION("GPU.ContextLost.WebNN", reason);
+      break;
     case ContextType::MEDIA:
       UMA_HISTOGRAM_ENUMERATION("GPU.ContextLost.Media", reason);
       break;
@@ -83,6 +86,8 @@ std::string ContextTypeToString(ContextType type) {
       return "WebGL";
     case ContextType::WEBGPU:
       return "WebGPU";
+    case ContextType::WEBNN:
+      return "WebNN";
     case ContextType::MEDIA:
       return "Media";
     case ContextType::UNKNOWN:

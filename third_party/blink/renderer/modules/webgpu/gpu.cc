@@ -23,6 +23,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/execution_context/navigator_base.h"
 #include "third_party/blink/renderer/core/inspector/console_message.h"
+#include "third_party/blink/renderer/modules/webgpu/context_provider.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_adapter.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_buffer.h"
 #include "third_party/blink/renderer/modules/webgpu/gpu_supported_features.h"
@@ -31,76 +32,72 @@
 #include "third_party/blink/renderer/platform/heap/thread_state.h"
 #include "third_party/blink/renderer/platform/instrumentation/use_counter.h"
 #include "third_party/blink/renderer/platform/privacy_budget/identifiability_digest_helpers.h"
-#include "third_party/blink/renderer/platform/scheduler/public/post_cross_thread_task.h"
-#include "third_party/blink/renderer/platform/scheduler/public/thread.h"
-#include "third_party/blink/renderer/platform/weborigin/kurl.h"
-#include "third_party/blink/renderer/platform/wtf/cross_thread_functional.h"
 
 namespace blink {
 
 namespace {
 
-void CreateContextProvider(
-    const KURL& url,
-    base::WaitableEvent* waitable_event,
-    std::unique_ptr<WebGraphicsContext3DProvider>* created_context_provider) {
-  DCHECK(IsMainThread());
-  *created_context_provider =
-      Platform::Current()->CreateWebGPUGraphicsContext3DProvider(url);
-  waitable_event->Signal();
-}
+// void CreateContextProvider(
+//     const KURL& url,
+//     base::WaitableEvent* waitable_event,
+//     std::unique_ptr<WebGraphicsContext3DProvider>* created_context_provider) {
+//   DCHECK(IsMainThread());
+//   *created_context_provider =
+//       Platform::Current()->CreateWebGPUGraphicsContext3DProvider(url);
+//   waitable_event->Signal();
+// }
 
-std::unique_ptr<WebGraphicsContext3DProvider> CreateContextProviderOnMainThread(
-    const KURL& url) {
-  scoped_refptr<base::SingleThreadTaskRunner> task_runner =
-      Thread::MainThread()->GetTaskRunner();
+// std::unique_ptr<WebGraphicsContext3DProvider> CreateContextProviderOnMainThread(
+//     const KURL& url) {
+//   scoped_refptr<base::SingleThreadTaskRunner> task_runner =
+//       Thread::MainThread()->GetTaskRunner();
 
-  base::WaitableEvent waitable_event;
-  std::unique_ptr<WebGraphicsContext3DProvider> created_context_provider;
-  PostCrossThreadTask(
-      *task_runner, FROM_HERE,
-      CrossThreadBindOnce(&CreateContextProvider, url,
-                          CrossThreadUnretained(&waitable_event),
-                          CrossThreadUnretained(&created_context_provider)));
+//   base::WaitableEvent waitable_event;
+//   std::unique_ptr<WebGraphicsContext3DProvider> created_context_provider;
+//   PostCrossThreadTask(
+//       *task_runner, FROM_HERE,
+//       CrossThreadBindOnce(&CreateContextProvider, url,
+//                           CrossThreadUnretained(&waitable_event),
+//                           CrossThreadUnretained(&created_context_provider)));
 
-  waitable_event.Wait();
-  return created_context_provider;
-}
+//   waitable_event.Wait();
+//   return created_context_provider;
+// }
 
-std::unique_ptr<WebGraphicsContext3DProvider> CreateContextProvider(
-    ExecutionContext& execution_context) {
-  const KURL& url = execution_context.Url();
-  std::unique_ptr<WebGraphicsContext3DProvider> context_provider;
-  if (IsMainThread()) {
-    context_provider =
-        Platform::Current()->CreateWebGPUGraphicsContext3DProvider(url);
-  } else {
-    context_provider = CreateContextProviderOnMainThread(url);
-  }
+// std::unique_ptr<WebGraphicsContext3DProvider> CreateContextProvider(
+//     ExecutionContext& execution_context) {
+//   const KURL& url = execution_context.Url();
+//   std::unique_ptr<WebGraphicsContext3DProvider> context_provider;
+//   if (IsMainThread()) {
+//     context_provider =
+//         Platform::Current()->CreateWebGPUGraphicsContext3DProvider(url);
+//   } else {
+//     context_provider = CreateContextProviderOnMainThread(url);
+//   }
 
-  // Note that we check for API blocking *after* creating the context. This is
-  // because context creation synchronizes against GpuProcessHost lifetime in
-  // the browser process, and GpuProcessHost destruction is what updates API
-  // blocking state on a GPU process crash. See https://crbug.com/1215907#c10
-  // for more details.
-  bool blocked = true;
-  mojo::Remote<mojom::blink::GpuDataManager> gpu_data_manager;
-  Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
-      gpu_data_manager.BindNewPipeAndPassReceiver());
-  gpu_data_manager->Are3DAPIsBlockedForUrl(url, &blocked);
-  if (blocked) {
-    return nullptr;
-  }
+//   // Note that we check for API blocking *after* creating the context. This is
+//   // because context creation synchronizes against GpuProcessHost lifetime in
+//   // the browser process, and GpuProcessHost destruction is what updates API
+//   // blocking state on a GPU process crash. See https://crbug.com/1215907#c10
+//   // for more details.
+//   bool blocked = true;
+//   mojo::Remote<mojom::blink::GpuDataManager> gpu_data_manager;
+//   Platform::Current()->GetBrowserInterfaceBroker()->GetInterface(
+//       gpu_data_manager.BindNewPipeAndPassReceiver());
+//   gpu_data_manager->Are3DAPIsBlockedForUrl(url, &blocked);
+//   if (blocked) {
+//     return nullptr;
+//   }
 
-  // TODO(kainino): we will need a better way of accessing the GPU interface
-  // from multiple threads than BindToCurrentThread et al.
-  if (context_provider && !context_provider->BindToCurrentThread()) {
-    // TODO(crbug.com/973017): Collect GPU info and surface context creation
-    // error.
-    return nullptr;
-  }
-  return context_provider;
-}
+//   // TODO(kainino): we will need a better way of accessing the GPU interface
+//   // from multiple threads than BindToCurrentThread et al.
+//   if (context_provider && !context_provider->BindToCurrentThread()) {
+//     // TODO(crbug.com/973017): Collect GPU info and surface context creation
+//     // error.
+//     return nullptr;
+//   }
+//   return context_provider;
+// }
 
 [[maybe_unused]] void AddConsoleWarning(ExecutionContext* execution_context,
                                         const char* message) {

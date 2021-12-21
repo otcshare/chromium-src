@@ -132,6 +132,9 @@ class WEBGPU_EXPORT WebGPUImplementation final : public WebGPUInterface,
                               const WGPUSupportedLimits*,
                               const char*)> request_device_callback) override;
 
+  std::tuple<uint32_t, uint32_t> GetDeviceId(WGPUDevice device) override;
+  std::tuple<uint32_t, uint32_t> GetBufferId(WGPUBuffer buffer) override;
+
   WGPUDevice DeprecatedEnsureDefaultDeviceSync() override;
 
  private:

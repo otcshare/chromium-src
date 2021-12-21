@@ -1,0 +1,154 @@
+typedef record<DOMString, MLOperand> MLNamedOperands;
+
+// typedef MLBufferResourceView MLBufferView;
+dictionary MLBatchNormalizationOptions {
+  MLOperand scale;
+  MLOperand bias;
+  long axis = 1;
+  float epsilon = 1e-5;
+  MLOperator activation;
+};
+
+enum MLInputOperandLayout { "nchw", "nhwc" };
+
+enum MLConv2dFilterOperandLayout { "oihw", "hwio", "ohwi", "ihwo" };
+
+enum MLAutoPad { "explicit", "same-upper", "same-lower" };
+
+dictionary MLConv2dOptions {
+  sequence<long> padding;
+  sequence<long> strides;
+  sequence<long> dilations;
+  MLAutoPad autoPad = "explicit";
+  long groups = 1;
+  MLInputOperandLayout inputLayout = "nchw";
+  MLConv2dFilterOperandLayout filterLayout = "oihw";
+  MLOperand bias;
+  MLOperator activation;
+};
+
+dictionary MLClampOptions {
+  float minValue;
+  float maxValue;
+};
+
+dictionary MLGemmOptions {
+  MLOperand c;
+  float alpha = 1.0;
+  float beta = 1.0;
+  boolean aTranspose = false;
+  boolean bTranspose = false;
+};
+
+dictionary MLLeakyReluOptions {
+  float alpha = 0.01;
+};
+
+dictionary MLPool2dOptions {
+  sequence<long> windowDimensions;
+  sequence<long> padding;
+  sequence<long> strides;
+  sequence<long> dilations;
+  MLAutoPad autoPad = "explicit";
+  MLInputOperandLayout layout = "nchw";
+};
+
+enum MLPaddingMode {
+  "constant",
+  "edge",
+  "reflection",
+  "symmetric"
+};
+
+dictionary MLPadOptions {
+  MLPaddingMode mode = "constant";
+  float value = 0;
+};
+
+dictionary MLTransposeOptions {
+  sequence<long> permutation;
+};
+
+enum MLInterpolationMode {
+  "nearest-neighbor",
+  "linear"
+};
+
+dictionary MLResample2dOptions {
+  MLInterpolationMode mode = "nearest-neighbor";
+  sequence<float> scales;
+  sequence<long> sizes;
+  sequence<long> axes;
+};
+
+dictionary MLReduceOptions {
+  sequence<long> axes;
+  boolean keepDimensions = false;
+};
+
+[Exposed(Window WebGPU, Worker WebGPU)] interface MLGraphBuilder {
+  constructor(MLContext context);
+
+  MLOperand input(DOMString name, MLOperandDescriptor desc);
+
+  MLOperand constant(MLOperandDescriptor desc, MLBufferView bufferView);
+
+  MLOperand add(MLOperand a, MLOperand b);
+  MLOperand sub(MLOperand a, MLOperand b);
+  MLOperand mul(MLOperand a, MLOperand b);
+  MLOperand div(MLOperand a, MLOperand b);
+  MLOperand max(MLOperand a, MLOperand b);
+  MLOperand min(MLOperand a, MLOperand b);
+  MLOperand pow(MLOperand a, MLOperand b);
+
+  MLOperand batchNormalization(
+      MLOperand input, MLOperand mean, MLOperand variance,
+      optional MLBatchNormalizationOptions options = {});
+
+  MLOperand clamp(MLOperand x, optional MLClampOptions options = {});
+  MLOperator clamp(optional MLClampOptions options = {});
+
+  MLOperand concat(sequence<MLOperand> inputs, long axis);
+
+  MLOperand conv2d(MLOperand input, MLOperand filter,
+                   optional MLConv2dOptions options = {});
+
+  MLOperand gemm(MLOperand a, MLOperand b, optional MLGemmOptions options = {});
+
+  MLOperand leakyRelu(MLOperand x, optional MLLeakyReluOptions options = {});
+  MLOperator leakyRelu(optional MLLeakyReluOptions options = {});
+
+  MLOperand matmul(MLOperand a, MLOperand b);
+
+  MLOperand averagePool2d(MLOperand input,
+                          optional MLPool2dOptions options = {});
+  MLOperand maxPool2d(MLOperand input, optional MLPool2dOptions options = {});
+
+  // MLOperand pad(MLOperand input, sequence<unsigned long> padding,
+  //               optional MLPadOptions options = {});
+
+  MLOperand reduceArgMax(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceArgMin(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceL1(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceL2(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceMax(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceMean(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceMin(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceProduct(MLOperand input, optional MLReduceOptions options = {});
+  MLOperand reduceSum(MLOperand input, optional MLReduceOptions options = {});
+
+  MLOperand relu(MLOperand input);
+  MLOperator relu();
+
+  MLOperand resample2d(MLOperand input, optional MLResample2dOptions options = {});
+  MLOperand reshape(MLOperand input, sequence<long> newShape);
+
+  MLOperand sigmoid(MLOperand x);
+  MLOperator sigmoid();
+
+  MLOperand softmax(MLOperand x);
+
+  MLOperand transpose(MLOperand input, optional MLTransposeOptions options = {});
+
+  MLGraph build(MLNamedOperands outputs);
+};

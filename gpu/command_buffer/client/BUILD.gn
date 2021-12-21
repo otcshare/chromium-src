@@ -48,6 +48,14 @@ group("webgpu") {
   }
 }
 
+group("webnn") {
+  if (is_component_build) {
+    public_deps = [ "//gpu:webnn" ]
+  } else {
+    public_deps = [ ":webnn_sources" ]
+  }
+}
+
 source_set("client_sources") {
   # External code should depend on this via //gpu/client above rather than
   # depending on this directly or the component build will break.
@@ -220,6 +228,18 @@ source_set("webgpu_interface") {
   ]
 }
 
+source_set("webnn_interface") {
+  sources = [
+    "webnn_interface.h",
+    "webnn_interface_autogen.h",
+  ]
+  deps = [
+    ":interface_base",
+    "//base",
+    "//gpu/command_buffer/common:webnn",
+  ]
+}
+
 # Library emulates GLES2 using command_buffers.
 component("gles2_implementation") {
   sources = gles2_implementation_source_files
@@ -319,6 +339,32 @@ source_set("webgpu_sources") {
       "dawn_client_serializer.h",
     ]
   }
+}
+
+source_set("webnn_sources") {
+  visibility = [ "//gpu/*" ]
+
+  configs += [ "//gpu:webnn_implementation" ]
+  deps = [
+    ":client",
+    ":gles2_implementation",
+    ":webnn_interface",
+    "//gpu/command_buffer/common:webnn",
+    "//third_party/webnn/src/webnn:webnn_proc",
+  ]
+  public_deps = [ "//third_party/webnn/src/webnn:webnn_headers" ]
+  sources = [
+    "webnn_cmd_helper.cc",
+    "webnn_cmd_helper.h",
+    "webnn_cmd_helper_autogen.h",
+    "webnn_export.h",
+    "webnn_implementation.cc",
+    "webnn_implementation.h",
+    "webnn_implementation_autogen.h",
+    "webnn_implementation_impl_autogen.h",
+    "webnn_client_serializer.cc",
+    "webnn_client_serializer.h",
+  ]
 }
 
 # Library emulates GLES2 using command_buffers.

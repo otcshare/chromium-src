@@ -8,15 +8,21 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_device_preference.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_model_format.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_power_preference.h"
+#include "third_party/blink/renderer/modules/ml/webnn/webnn_context.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/graphics/gpu/webnn_control_client_holder.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
+
+#include <webnn/webnn.h>
 
 namespace blink {
 
 class ML;
+class WebnnContext;
+class ExecutionContext;
 
-class MLContext final : public ScriptWrappable {
+class MLContext final : public WebnnContext {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -24,7 +30,14 @@ class MLContext final : public ScriptWrappable {
             const V8MLPowerPreference power_preference,
             const V8MLModelFormat model_format,
             const unsigned int num_threads,
-            ML* ml);
+            ML* ml,
+            ExecutionContext* execution_context,
+            scoped_refptr<WebnnControlClientHolder> webnn_control_client,
+            WNNContext webnn_context);
+  MLContext(ML* ml,
+            ExecutionContext* execution_context,
+            scoped_refptr<WebnnControlClientHolder> webnn_control_client,
+            WNNContext webnn_context);
 
   MLContext(const MLContext&) = delete;
   MLContext& operator=(const MLContext&) = delete;

@@ -56,6 +56,7 @@ class GPUBuffer : public DawnObject<WGPUBuffer> {
   void destroy(ScriptState* script_state);
 
   void DetachMappedArrayBuffers(v8::Isolate* isolate);
+  std::tuple<uint32_t, uint32_t> GetBufferId();
 
  private:
   ScriptPromise MapAsyncImpl(ScriptState* script_state,

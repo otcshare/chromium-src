@@ -11,7 +11,9 @@
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
+#include "gpu/command_buffer/client/webnn_interface.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 
 namespace cc {
 class ImageDecodeCache;
@@ -43,10 +45,12 @@ class WebGraphicsContext3DProviderImpl
 
   // WebGraphicsContext3DProvider implementation.
   bool BindToCurrentThread() override;
+  gpu::CommandBufferId GetCommandBufferID() override;
   gpu::InterfaceBase* InterfaceBase() override;
   gpu::gles2::GLES2Interface* ContextGL() override;
   gpu::raster::RasterInterface* RasterInterface() override;
   gpu::webgpu::WebGPUInterface* WebGPUInterface() override;
+  gpu::webnn::WebNNInterface* WebNNInterface() override;
   bool IsContextLost() override;
   GrDirectContext* GetGrContext() override;
   const gpu::Capabilities& GetCapabilities() const override;

@@ -195,6 +195,9 @@ class CONTENT_EXPORT RendererBlinkPlatformImpl : public BlinkPlatformImpl {
   std::unique_ptr<blink::WebGraphicsContext3DProvider>
   CreateWebGPUGraphicsContext3DProvider(
       const blink::WebURL& top_document_web_url) override;
+  std::unique_ptr<blink::WebGraphicsContext3DProvider>
+  CreateWebNNContextProvider(
+      const blink::WebURL& top_document_web_url) override;
   gpu::GpuMemoryBufferManager* GetGpuMemoryBufferManager() override;
   blink::WebString ConvertIDNToUnicode(const blink::WebString& host) override;
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)

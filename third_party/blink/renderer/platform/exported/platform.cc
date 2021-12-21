@@ -359,6 +359,11 @@ Platform::CreateWebGPUGraphicsContext3DProvider(
   return nullptr;
 }
 
+std::unique_ptr<WebGraphicsContext3DProvider>
+Platform::CreateWebNNContextProvider(const WebURL& top_document_url) {
+  return nullptr;
+}
+
 scoped_refptr<viz::RasterContextProvider>
 Platform::SharedMainThreadContextProvider() {
   return nullptr;

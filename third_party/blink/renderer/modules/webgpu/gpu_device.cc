@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 
 #include "gpu/command_buffer/client/webgpu_interface.h"
+#include "gpu/ipc/common/command_buffer_id.h"
 #include "third_party/blink/public/platform/platform.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_gpu_compute_pipeline_descriptor.h"
@@ -492,6 +493,17 @@ void GPUDevice::EnsureExternalTextureDestroyed(
   Microtask::EnqueueMicrotask(WTF::Bind(
       &GPUDevice::DestroyExternalTexturesMicrotask, WrapWeakPersistent(this)));
   has_pending_microtask_ = true;
+}
+
+std::tuple<uint32_t, uint32_t> GPUDevice::GetDeviceID() {
+  gpu::webgpu::WebGPUInterface* webgpu =
+      GetContextProviderWeakPtr()->ContextProvider()->WebGPUInterface();
+  return webgpu->GetDeviceId(GetHandle());
+}
+
+gpu::CommandBufferId GPUDevice::GetCommandBufferID() const {
+  auto context_provider = GetContextProviderWeakPtr();
+  return context_provider->ContextProvider()->GetCommandBufferID();
 }
 
 void GPUDevice::DestroyExternalTexturesMicrotask() {

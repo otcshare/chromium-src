@@ -892,6 +892,8 @@ void PopulateFrameBinders(RenderFrameHostImpl* host, mojo::BinderMap* map) {
   map->Add<handwriting::mojom::HandwritingRecognitionService>(
       base::BindRepeating(&CreateHandwritingRecognitionService));
 
+//   map->Add<ml::mojom::MLService>(base::BindRepeating(&CreateMLService));
+
   map->Add<blink::mojom::WebBluetoothService>(base::BindRepeating(
       &RenderFrameHostImpl::CreateWebBluetoothService, base::Unretained(host)));
 

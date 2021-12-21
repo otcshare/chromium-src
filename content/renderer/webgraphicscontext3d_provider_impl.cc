@@ -16,6 +16,7 @@
 #include "media/renderers/paint_canvas_video_renderer.h"
 #include "services/viz/public/cpp/gpu/context_provider_command_buffer.h"
 #include "third_party/skia/include/gpu/GrDirectContext.h"
+#include "gpu/ipc/client/command_buffer_proxy_impl.h"
 
 namespace content {
 
@@ -25,6 +26,10 @@ WebGraphicsContext3DProviderImpl::WebGraphicsContext3DProviderImpl(
 
 WebGraphicsContext3DProviderImpl::~WebGraphicsContext3DProviderImpl() {
   provider_->RemoveObserver(this);
+}
+
+gpu::CommandBufferId WebGraphicsContext3DProviderImpl::GetCommandBufferID() {
+  return provider_->GetCommandBufferProxy()->GetCommandBufferID();
 }
 
 bool WebGraphicsContext3DProviderImpl::BindToCurrentThread() {
@@ -58,6 +63,11 @@ WebGraphicsContext3DProviderImpl::RasterInterface() {
 gpu::webgpu::WebGPUInterface*
 WebGraphicsContext3DProviderImpl::WebGPUInterface() {
   return provider_->WebGPUInterface();
+}
+
+gpu::webnn::WebNNInterface*
+WebGraphicsContext3DProviderImpl::WebNNInterface() {
+  return provider_->WebNNInterface();
 }
 
 bool WebGraphicsContext3DProviderImpl::IsContextLost() {

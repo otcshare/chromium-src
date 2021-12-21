@@ -56,6 +56,7 @@
 #include "gpu/ipc/service/image_decode_accelerator_stub.h"
 #include "gpu/ipc/service/raster_command_buffer_stub.h"
 #include "gpu/ipc/service/webgpu_command_buffer_stub.h"
+#include "gpu/ipc/service/webnn_command_buffer_stub.h"
 #include "ipc/ipc_channel.h"
 #include "mojo/public/cpp/bindings/associated_receiver.h"
 #include "ui/gl/gl_context.h"
@@ -870,6 +871,15 @@ void GpuChannel::CreateCommandBuffer(
     }
 
     stub = std::make_unique<WebGPUCommandBufferStub>(
+        this, *init_params, command_buffer_id, sequence_id, stream_id,
+        route_id);
+  } else if (init_params->attribs.context_type == CONTEXT_TYPE_WEBNN) {
+    if (!gpu_channel_manager_->gpu_preferences().enable_webgpu) {
+      DLOG(ERROR) << "ContextResult::kFatalFailure: WebNN not enabled";
+      return;
+    }
+
+    stub = std::make_unique<WebNNCommandBufferStub>(
         this, *init_params, command_buffer_id, sequence_id, stream_id,
         route_id);
   } else if (init_params->attribs.enable_raster_interface &&

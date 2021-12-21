@@ -45,6 +45,10 @@ group("webgpu") {
   public_deps = [ ":webgpu_sources" ]
 }
 
+group("webnn") {
+  public_deps = [ ":webnn_sources" ]
+}
+
 # Minimal set of definitions which don't have GPU dependencies outside of this
 # directory.
 source_set("common_base_sources") {
@@ -210,6 +214,33 @@ source_set("webgpu_sources") {
   public_deps = [
     ":common",
     "//third_party/dawn/src/dawn_wire:dawn_wire_headers",
+    "//ui/gl:buildflags",
+  ]
+}
+
+source_set("webnn_sources") {
+  visibility = [ "//gpu/*" ]
+
+  sources = [
+    "webnn_cmd_enums.h",
+    "webnn_cmd_format.cc",
+    "webnn_cmd_format.h",
+    "webnn_cmd_format_autogen.h",
+    "webnn_cmd_ids.h",
+    "webnn_cmd_ids_autogen.h",
+  ]
+
+  configs += [ "//gpu:webnn_implementation" ]
+
+  deps = [
+    ":gles2_utils",
+    "//base",
+    "//third_party/webnn/src/webnn_wire",
+  ]
+
+  public_deps = [
+    ":common",
+    "//third_party/webnn/src/webnn_wire:webnn_wire_headers",
     "//ui/gl:buildflags",
   ]
 }

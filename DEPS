@@ -237,6 +237,9 @@ vars = {
   # Make Dawn skip its standalone dependencies
   'dawn_standalone': False,
 
+  # Make Webnn skip its standalone dependencies
+  'webnn_standalone': False,
+
   # reclient CIPD package version
   'reclient_version': 're_client_version:0.57.0.4865132-gomaip',
 
@@ -245,6 +248,8 @@ vars = {
   'boringssl_git': 'https://boringssl.googlesource.com',
   'chromium_git': 'https://chromium.googlesource.com',
   'dawn_git': 'https://dawn.googlesource.com',
+  'gpgmm_git': 'https://github.com/intel',
+  'junwei_git': 'https://github.com/fujunwei',
   'pdfium_git': 'https://pdfium.googlesource.com',
   'quiche_git': 'https://quiche.googlesource.com',
   'skia_git': 'https://skia.googlesource.com',
@@ -364,7 +369,15 @@ vars = {
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
-  'dawn_revision': 'bf9fde32ac1eb609357fdb0ba6c7d913f00d6f9f',
+  'dawn_revision': '8c02f48581a3fef47fb7f11f476552916bfdf7c2',
+  # Three lines of non-changing comments so that
+  # the commit queue can handle CLs rolling feed
+  # and whatever else without interference from each other.
+  'webnn_revision': '6f6a9c402d3ec61859428c0f4aacb0ba78964b4c',
+  # Three lines of non-changing comments so that
+  # the commit queue can handle CLs rolling feed
+  # and whatever else without interference from each other.
+  'gpgmm_revision': '1e5ae00712c8f91e209864027818e26093df9f45',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
@@ -1006,7 +1019,13 @@ deps = {
     Var('chromium_git') + '/external/github.com/videolan/dav1d.git' + '@' + '87f9a81cd770e49394a45deca7a3df41243de00b',
 
   'src/third_party/dawn':
-    Var('dawn_git') + '/dawn.git' + '@' +  Var('dawn_revision'),
+    Var('junwei_git') + '/dawn.git' + '@' +  Var('dawn_revision'),
+
+  'src/third_party/webnn':
+    Var('junwei_git') + '/webnn-native-1.git' + '@' +  Var('webnn_revision'),
+
+  'src/third_party/gpgmm':
+    Var('gpgmm_git') + '/gpgmm.git' + '@' +  Var('gpgmm_revision'),
 
   'src/third_party/libjxl/src':
     Var('chromium_git') + '/external/gitlab.com/wg1/jpeg-xl.git' + '@' + Var('libjxl_revision'),
@@ -4635,6 +4654,7 @@ recursedeps = [
   'src/third_party/angle',
   # Dawn and Tint's revision are linked
   'src/third_party/dawn',
+  'src/third_party/webnn',
   'src/third_party/openscreen/src',
   'src/third_party/vulkan-deps',
   # src-internal has its own DEPS file to pull additional internal repos

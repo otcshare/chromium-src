@@ -569,6 +569,12 @@ class BLINK_PLATFORM_EXPORT Platform {
   virtual std::unique_ptr<WebGraphicsContext3DProvider>
   CreateWebGPUGraphicsContext3DProvider(const WebURL& top_document_url);
 
+  // Returns a newly allocated and initialized WebNN context provider,
+  // backed by an independent context. Returns null if the context cannot be
+  // created or initialized.
+  virtual std::unique_ptr<WebGraphicsContext3DProvider>
+  CreateWebNNContextProvider(const WebURL& top_document_url);
+
   virtual gpu::GpuMemoryBufferManager* GetGpuMemoryBufferManager() {
     return nullptr;
   }

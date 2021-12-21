@@ -13,6 +13,7 @@
 #include "third_party/blink/renderer/modules/webgpu/dawn_object.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/dawn_callback.h"
 #include "third_party/blink/renderer/platform/heap/garbage_collected.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 
 namespace blink {
 
@@ -139,6 +140,9 @@ class GPUDevice final : public EventTargetWithInlineData,
   void AddConsoleWarning(const char* message);
 
   void EnsureExternalTextureDestroyed(GPUExternalTexture* externalTexture);
+
+  std::tuple<uint32_t, uint32_t> GetDeviceID();
+  gpu::CommandBufferId GetCommandBufferID() const;
 
  private:
   using LostProperty =

@@ -639,6 +639,28 @@ void WebGPUImplementation::RequestDeviceAsync(
 #endif
 }
 
+std::tuple<uint32_t, uint32_t> WebGPUImplementation::GetDeviceId(
+    WGPUDevice device) {
+#if BUILDFLAG(USE_DAWN)
+  dawn_wire_->serializer()->Commit();
+  return dawn_wire_->wire_client()->GetDeviceId(device);
+#else
+  NOTREACHED();
+  return {};
+#endif
+}
+
+std::tuple<uint32_t, uint32_t> WebGPUImplementation::GetBufferId(
+    WGPUBuffer buffer) {
+#if BUILDFLAG(USE_DAWN)
+  dawn_wire_->serializer()->Commit();
+  return dawn_wire_->wire_client()->GetBufferId(buffer);
+#else
+  NOTREACHED();
+  return {};
+#endif
+}
+
 WGPUDevice WebGPUImplementation::DeprecatedEnsureDefaultDeviceSync() {
   if (deprecated_default_device_ != nullptr) {
     return deprecated_default_device_;

@@ -1,0 +1,14 @@
+
+// typedef (MLInput or MLBufferResourceView) MLInputBuffer;
+// TODO: Use MLInputBuffer instead of MLBufferResourceView for MLNamedInputs.
+typedef record<DOMString, (MLResource or MLInput)> MLNamedInputs;
+typedef record<DOMString, MLResource> MLNamedOutputs;
+// typedef record<DOMString, MLBufferResourceView> MLNamedInputs;
+// typedef record<DOMString, MLBufferResourceView> MLNamedOutputs;
+
+[Exposed(Window WebGPU, Worker WebGPU)]
+interface MLGraph {
+  [CallWith=ScriptState, RaisesException]
+    Promise<void> computeAsync(MLNamedInputs inputs, MLNamedOutputs outputs);
+  void compute(MLNamedInputs inputs, MLNamedOutputs outputs);
+};

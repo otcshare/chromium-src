@@ -10,7 +10,7 @@
 // TODO(crbug.com/1309261): This is different from the specification of WebNN
 // because in the first version we do not involve any hardware acceleration. We
 // should update it when WebNN is implemented.
-typedef ArrayBufferView MLBufferView;
+typedef ([AllowShared] ArrayBufferView or MLBufferResourceView) MLBufferView;
 
 // TODO(crbug.com/1309261): This is different from the specification of WebNN
 // because in the first version we do not involve any hardware acceleration. We

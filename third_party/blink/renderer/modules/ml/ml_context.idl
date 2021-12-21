@@ -13,8 +13,8 @@
 // a dictionary may be insufficient.
 
 [
-  RuntimeEnabled=MachineLearningModelLoader,
+  RuntimeEnabled=WebGPU,
   SecureContext,
-  Exposed=Window
+  Exposed(Window WebGPU, Worker WebGPU)
 ] interface MLContext {
 };

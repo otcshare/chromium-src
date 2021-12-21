@@ -27,6 +27,7 @@ enum class ContextType {
   VIDEO_CAPTURE,
   WEBGL,
   WEBGPU,
+  WEBNN,
   MEDIA,
   UNKNOWN,
   FOR_TESTING,

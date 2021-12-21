@@ -916,6 +916,40 @@ RendererBlinkPlatformImpl::CreateWebGPUGraphicsContext3DProvider(
 #endif
 }
 
+std::unique_ptr<blink::WebGraphicsContext3DProvider>
+RendererBlinkPlatformImpl::CreateWebNNContextProvider(
+    const blink::WebURL& top_document_web_url) {
+  scoped_refptr<gpu::GpuChannelHost> gpu_channel_host(
+      RenderThreadImpl::current()->EstablishGpuChannelSync());
+  if (!gpu_channel_host) {
+    // TODO(crbug.com/973017): Collect GPU info and surface context creation
+    // error.
+    return nullptr;
+  }
+
+  gpu::ContextCreationAttribs attributes;
+  // TODO: It's not clear yet how GPU preferences work for WebNN.
+  attributes.gpu_preference = gl::GpuPreference::kHighPerformance;
+  attributes.enable_gles2_interface = false;
+  attributes.context_type = gpu::CONTEXT_TYPE_WEBNN;
+
+  constexpr bool automatic_flushes = true;
+  constexpr bool support_locking = false;
+  constexpr bool support_grcontext = false;
+
+  scoped_refptr<viz::ContextProviderCommandBuffer> provider(
+      new viz::ContextProviderCommandBuffer(
+          std::move(gpu_channel_host),
+          RenderThreadImpl::current()->GetGpuMemoryBufferManager(),
+          kGpuStreamIdDefault, kGpuStreamPriorityDefault,
+          gpu::kNullSurfaceHandle, GURL(top_document_web_url),
+          automatic_flushes, support_locking, support_grcontext,
+          gpu::SharedMemoryLimits::ForWebGPUContext(), attributes,
+          viz::command_buffer_metrics::ContextType::WEBNN));
+  return std::make_unique<WebGraphicsContext3DProviderImpl>(
+      std::move(provider));
+}
+
 //------------------------------------------------------------------------------
 
 gpu::GpuMemoryBufferManager*

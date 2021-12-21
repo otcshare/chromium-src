@@ -9,6 +9,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
@@ -18,10 +19,10 @@ namespace blink {
 class MLContextOptions;
 class ScriptPromise;
 class ScriptState;
+class WebnnInstance;
 
-// This class represents the "Machine Learning" object "navigator.ml" and will
-// be shared between the Model Loader API and WebNN API.
-class ML final : public ScriptWrappable {
+class ML final : public ScriptWrappable,
+                 public ExecutionContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -33,15 +34,23 @@ class ML final : public ScriptWrappable {
   void CreateModelLoader(ScriptState* script_state,
                          ExceptionState& exception_state);
 
+  // ScriptWrappable overrides
   void Trace(blink::Visitor*) const override;
 
+  // ExecutionContextLifecycleObserver overrides
+  void ContextDestroyed() override;
+
   // IDL interface:
-  ScriptPromise createContext(ScriptState* state,
-                              MLContextOptions* option,
-                              ExceptionState& exception_state);
+  MLContext* createContext(MLContextOptions* option);
+  MLContext* createContext(GPUDevice* device);
+
+  // WebNN Interface
+  WNNInstance GetInstance() const;
 
  private:
   Member<ExecutionContext> execution_context_;
+  // WebNN Implementation
+  std::unique_ptr<WebnnInstance> webnn_instance_;
 };
 
 }  // namespace blink

@@ -9,6 +9,7 @@ import("//testing/libfuzzer/fuzzer_test.gni")
 import("//testing/test.gni")
 import("//third_party/protobuf/proto_library.gni")
 import("//ui/gl/features.gni")
+import("//third_party//webnn/build_overrides/webnn_features.gni")
 if (is_android) {
   # Pull in enable_chrome_android_internal.
   import("//build/config/android/config.gni")
@@ -36,6 +37,14 @@ config("raster_implementation") {
 
 config("webgpu_implementation") {
   defines = [ "WEBGPU_IMPLEMENTATION" ]
+  configs = [ "//build/config/compiler:wexit_time_destructors" ]
+}
+
+config("webnn_implementation") {
+  defines = [ "WEBNN_IMPLEMENTATION" ]
+  if (webnn_enable_gpu_buffer) {
+    defines += [ "WEBNN_ENABLE_GPU_BUFFER" ]
+  }
   configs = [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
@@ -70,6 +79,10 @@ component("mailbox") {
 
 component("webgpu") {
   public_deps = [ "//gpu/command_buffer/client:webgpu_sources" ]
+}
+
+component("webnn") {
+  public_deps = [ "//gpu/command_buffer/client:webnn_sources" ]
 }
 
 if (!use_static_angle) {
@@ -174,6 +187,10 @@ static_library("test_support") {
     "command_buffer/client/webgpu_interface_stub.h",
     "command_buffer/client/webgpu_interface_stub_autogen.h",
     "command_buffer/client/webgpu_interface_stub_impl_autogen.h",
+    "command_buffer/client/webnn_interface_stub.cc",
+    "command_buffer/client/webnn_interface_stub.h",
+    "command_buffer/client/webnn_interface_stub_autogen.h",
+    "command_buffer/client/webnn_interface_stub_impl_autogen.h",
     "command_buffer/service/copy_texture_chromium_mock.cc",
     "command_buffer/service/copy_texture_chromium_mock.h",
     "command_buffer/service/error_state_mock.cc",

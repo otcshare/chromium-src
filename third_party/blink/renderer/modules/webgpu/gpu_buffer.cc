@@ -148,11 +148,8 @@ GPUBuffer* GPUBuffer::Create(GPUDevice* device,
   return buffer;
 }
 
-GPUBuffer::GPUBuffer(GPUDevice* device,
-                     uint64_t size,
-                     WGPUBuffer buffer)
-    : DawnObject<WGPUBuffer>(device, buffer), size_(size) {
-}
+GPUBuffer::GPUBuffer(GPUDevice* device, uint64_t size, WGPUBuffer buffer)
+    : DawnObject<WGPUBuffer>(device, buffer), size_(size) {}
 
 GPUBuffer::~GPUBuffer() {
   if (mappable_buffer_handles_) {
@@ -208,6 +205,12 @@ void GPUBuffer::destroy(ScriptState* script_state) {
   // Drop the reference to the mapped buffer handles. No longer
   // need to remove the WGPUBuffer from this set in ~GPUBuffer.
   mappable_buffer_handles_ = nullptr;
+}
+
+std::tuple<uint32_t, uint32_t> GPUBuffer::GetBufferId() {
+  gpu::webgpu::WebGPUInterface* webgpu =
+      GetContextProviderWeakPtr()->ContextProvider()->WebGPUInterface();
+  return webgpu->GetBufferId(GetHandle());
 }
 
 ScriptPromise GPUBuffer::MapAsyncImpl(ScriptState* script_state,

@@ -33,6 +33,8 @@
 #include "gpu/command_buffer/client/transfer_buffer.h"
 #include "gpu/command_buffer/client/webgpu_cmd_helper.h"
 #include "gpu/command_buffer/client/webgpu_implementation.h"
+#include "gpu/command_buffer/client/webnn_cmd_helper.h"
+#include "gpu/command_buffer/client/webnn_implementation.h"
 #include "gpu/command_buffer/common/constants.h"
 #include "gpu/command_buffer/common/skia_utils.h"
 #include "gpu/command_buffer/service/gpu_switches.h"
@@ -187,6 +189,39 @@ gpu::ContextResult ContextProviderCommandBuffer::BindToCurrentThread() {
     impl_ = webgpu_impl.get();
     webgpu_interface_ = std::move(webgpu_impl);
     helper_ = std::move(webgpu_helper);
+  } else if (attributes_.context_type == gpu::CONTEXT_TYPE_WEBNN) {
+    auto webnn_helper =
+        std::make_unique<gpu::webnn::WebNNCmdHelper>(command_buffer_.get());
+    webnn_helper->SetAutomaticFlushes(automatic_flushes_);
+    bind_result_ =
+        webnn_helper->Initialize(memory_limits_.command_buffer_size);
+    if (bind_result_ != gpu::ContextResult::kSuccess) {
+      DLOG(ERROR) << "Failed to initialize WebNNCmdHelper.";
+      return bind_result_;
+    }
+
+    // The transfer buffer is used to serialize Put/Get commands
+    transfer_buffer_ =
+        std::make_unique<gpu::TransferBuffer>(webnn_helper.get());
+
+    // The WebNNImplementation exposes the WebNNInterface, as well as the
+    // gpu::ContextSupport interface.
+    auto webnn_impl = std::make_unique<gpu::webnn::WebNNImplementation>(
+        webnn_helper.get(), transfer_buffer_.get(), command_buffer_.get());
+    bind_result_ = webnn_impl->Initialize(memory_limits_);
+    if (bind_result_ != gpu::ContextResult::kSuccess) {
+      DLOG(ERROR) << "Failed to initialize WebNNImplementation.";
+      return bind_result_;
+    }
+
+    std::string type_name =
+        command_buffer_metrics::ContextTypeToString(context_type_);
+    std::string unique_context_name =
+        base::StringPrintf("%s-%p", type_name.c_str(), webnn_impl.get());
+
+    impl_ = webnn_impl.get();
+    webnn_interface_ = std::move(webnn_impl);
+    helper_ = std::move(webnn_helper);
   } else if (attributes_.enable_raster_interface &&
              !attributes_.enable_gles2_interface &&
              !attributes_.enable_grcontext) {
@@ -514,6 +549,14 @@ gpu::webgpu::WebGPUInterface* ContextProviderCommandBuffer::WebGPUInterface() {
   CheckValidThreadOrLockAcquired();
 
   return webgpu_interface_.get();
+}
+
+gpu::webnn::WebNNInterface* ContextProviderCommandBuffer::WebNNInterface() {
+  DCHECK(bind_tried_);
+  DCHECK_EQ(bind_result_, gpu::ContextResult::kSuccess);
+  CheckValidThreadOrLockAcquired();
+
+  return webnn_interface_.get();
 }
 
 bool ContextProviderCommandBuffer::OnMemoryDump(
