@@ -229,6 +229,9 @@ vars = {
   # Make Dawn skip its standalone dependencies
   'dawn_standalone': False,
 
+  # Make Webnn skip its standalone dependencies
+  'webnn_standalone': False,
+
   # reclient CIPD package version
   'reclient_version': 're_client_version:0.49.0.8e7e159-gomaip',
 
@@ -237,6 +240,7 @@ vars = {
   'boringssl_git': 'https://boringssl.googlesource.com',
   'chromium_git': 'https://chromium.googlesource.com',
   'dawn_git': 'https://dawn.googlesource.com',
+  'webnn_git': 'https://github.com/fujunwei',
   'pdfium_git': 'https://pdfium.googlesource.com',
   'quiche_git': 'https://quiche.googlesource.com',
   'skia_git': 'https://skia.googlesource.com',
@@ -361,6 +365,10 @@ vars = {
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
   'dawn_revision': '0d42579322a4df32376b9772783997efcc850bd7',
+  # Three lines of non-changing comments so that
+  # the commit queue can handle CLs rolling feed
+  # and whatever else without interference from each other.
+  'webnn_revision': '85d24f141052475664621feff589c4f350f79739',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
@@ -919,6 +927,9 @@ deps = {
 
   'src/third_party/dawn':
     Var('dawn_git') + '/dawn.git' + '@' +  Var('dawn_revision'),
+
+  'src/third_party/webnn':
+    Var('webnn_git') + '/webnn-native-1.git' + '@' +  Var('webnn_revision'),
 
   'src/third_party/libjxl/src':
     Var('chromium_git') + '/external/gitlab.com/wg1/jpeg-xl.git' + '@' + Var('libjxl_revision'),
@@ -4759,6 +4770,7 @@ recursedeps = [
   'src/third_party/angle',
   # Dawn and Tint's revision are linked
   'src/third_party/dawn',
+  'src/third_party/webnn',
   'src/third_party/openscreen/src',
   'src/third_party/vulkan-deps',
   # src-internal has its own DEPS file to pull additional internal repos

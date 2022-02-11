@@ -39,6 +39,11 @@ config("webgpu_implementation") {
   configs = [ "//build/config/compiler:wexit_time_destructors" ]
 }
 
+config("webnn_implementation") {
+  defines = [ "WEBNN_IMPLEMENTATION" ]
+  configs = [ "//build/config/compiler:wexit_time_destructors" ]
+}
+
 component("gpu") {
   public_deps = [
     "//gpu/command_buffer/client:client_sources",
