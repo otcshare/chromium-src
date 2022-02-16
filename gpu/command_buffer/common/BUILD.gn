@@ -223,6 +223,7 @@ source_set("webnn_sources") {
 
   sources = [
     "webnn_cmd_enums.h",
+    "webnn_cmd_format.cc",
     "webnn_cmd_format.h",
     "webnn_cmd_format_autogen.h",
     "webnn_cmd_ids.h",

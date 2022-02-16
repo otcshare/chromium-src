@@ -14,6 +14,8 @@ namespace webnn {
 
 #include "gpu/command_buffer/common/webnn_cmd_ids_autogen.h"
 
+const char* GetCommandName(CommandId command_id);
+
 }  // namespace webnn
 }  // namespace gpu
 
