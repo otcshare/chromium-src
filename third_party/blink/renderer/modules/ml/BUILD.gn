@@ -14,9 +14,12 @@ blink_modules_sources("ml") {
     "ml_model_loaded.h",
     "ml_model_loader.cc",
     "ml_model_loader.h",
-    "ml_type_converters.cc",
-    "ml_type_converters.h",
+    #"ml_type_converters.cc",
+    #"ml_type_converters.h",
     "navigator_ml.cc",
     "navigator_ml.h",
+  ]
+  deps = [
+    "//third_party/blink/renderer/modules/ml/webnn",
   ]
 }

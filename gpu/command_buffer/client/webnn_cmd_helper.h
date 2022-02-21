@@ -15,7 +15,7 @@ namespace gpu {
 namespace webnn {
 
 // A class that helps write WebNN command buffers.
-class WEBNN_EXPORT WebNNCmdHelper : public CommandBufferHelper {
+class WEBNN_IMPLEMENTATION_EXPORT WebNNCmdHelper : public CommandBufferHelper {
  public:
   explicit WebNNCmdHelper(CommandBuffer* command_buffer);
 

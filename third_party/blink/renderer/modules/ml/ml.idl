@@ -5,9 +5,7 @@
 // https://github.com/webmachinelearning/model-loader/blob/main/explainer.md
 
 [
-  RuntimeEnabled=MachineLearning,
   Exposed=Window
 ] interface ML {
-  [CallWith=ScriptState, RaisesException]
-      Promise<MLContext> createContext(optional MLContextOptions options = {});
+    MLContext createContext(optional MLContextOptions options = {});
 };

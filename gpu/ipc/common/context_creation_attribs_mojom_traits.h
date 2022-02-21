@@ -62,6 +62,8 @@ struct GPU_EXPORT EnumTraits<gpu::mojom::ContextType, gpu::ContextType> {
         return gpu::mojom::ContextType::kOpenGLES31ForTesting;
       case gpu::CONTEXT_TYPE_WEBGPU:
         return gpu::mojom::ContextType::kWebGPU;
+      case gpu::CONTEXT_TYPE_WEBNN:
+        return gpu::mojom::ContextType::kWebNN;
       default:
         NOTREACHED();
     }
@@ -86,6 +88,9 @@ struct GPU_EXPORT EnumTraits<gpu::mojom::ContextType, gpu::ContextType> {
         return true;
       case gpu::mojom::ContextType::kWebGPU:
         *out = gpu::CONTEXT_TYPE_WEBGPU;
+        return true;
+      case gpu::mojom::ContextType::kWebNN:
+        *out = gpu::CONTEXT_TYPE_WEBNN;
         return true;
       default:
         return false;

@@ -957,6 +957,8 @@ component("platform") {
     "graphics/gpu/webgpu_resource_provider_cache.h",
     "graphics/gpu/webgpu_swap_buffer_provider.cc",
     "graphics/gpu/webgpu_swap_buffer_provider.h",
+    "graphics/gpu/webnn_control_client_holder.cc",
+    "graphics/gpu/webnn_control_client_holder.h",
     "graphics/gpu/xr_frame_transport.cc",
     "graphics/gpu/xr_frame_transport.h",
     "graphics/gpu/xr_webgl_drawing_buffer.cc",

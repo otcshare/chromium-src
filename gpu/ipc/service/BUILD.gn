@@ -50,6 +50,8 @@ component("service") {
     "shared_image_stub.h",
     "webgpu_command_buffer_stub.cc",
     "webgpu_command_buffer_stub.h",
+    "webnn_command_buffer_stub.cc",
+    "webnn_command_buffer_stub.h",
   ]
   defines = [ "GPU_IPC_SERVICE_IMPLEMENTATION" ]
   if (subpixel_font_rendering_disabled) {

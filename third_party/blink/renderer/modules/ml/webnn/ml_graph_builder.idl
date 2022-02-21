@@ -1,0 +1,99 @@
+typedef record<DOMString, MLOperand> MLNamedOperands;
+
+// typedef MLBufferResourceView MLBufferView;
+
+enum MLInputOperandLayout {
+  "nchw",
+  "nhwc"
+};
+
+enum MLConv2dFilterOperandLayout {
+  "oihw",
+  "hwio",
+  "ohwi",
+  "ihwo"
+};
+
+enum MLAutoPad {
+  "explicit",
+  "same-upper",
+  "same-lower"
+};
+
+dictionary MLConv2dOptions {
+  sequence<long> padding;
+  sequence<long> strides;
+  sequence<long> dilations;
+  MLAutoPad autoPad = "explicit";
+  long groups = 1;
+  MLInputOperandLayout inputLayout = "nchw";
+  MLConv2dFilterOperandLayout filterLayout = "oihw";
+  MLOperand bias;
+  MLOperator activation;
+};
+
+dictionary MLClampOptions {
+  float minValue;
+  float maxValue;
+};
+
+dictionary MLGemmOptions {
+  MLOperand c;
+  float alpha = 1.0;
+  float beta = 1.0;
+  boolean aTranspose = false;
+  boolean bTranspose = false;
+};
+
+dictionary MLLeakyReluOptions {
+  float alpha = 0.01;
+};
+
+dictionary MLPool2dOptions {
+  sequence<long> windowDimensions;
+  sequence<long> padding;
+  sequence<long> strides;
+  sequence<long> dilations;
+  MLAutoPad autoPad = "explicit";
+  MLInputOperandLayout layout = "nchw";
+};
+
+[Exposed(Window WebGPU, Worker WebGPU)]
+interface MLGraphBuilder {
+  constructor(MLContext context);
+
+  MLOperand input(DOMString name, MLOperandDescriptor desc);
+
+  MLOperand constant(MLOperandDescriptor desc, MLBufferView bufferView);
+
+  MLOperand add(MLOperand a, MLOperand b);
+
+  MLOperand clamp(MLOperand x, optional MLClampOptions options = {});
+  MLOperator clamp(optional MLClampOptions options = {});
+
+  MLOperand concat(sequence<MLOperand> inputs, long axis);
+
+  MLOperand conv2d(MLOperand input, MLOperand filter, optional MLConv2dOptions options = {});
+
+  MLOperand gemm(MLOperand a, MLOperand b, optional MLGemmOptions options = {});
+
+  MLOperand leakyRelu(MLOperand x, optional MLLeakyReluOptions options = {});
+  MLOperator leakyRelu(optional MLLeakyReluOptions options = {});
+
+  MLOperand matmul(MLOperand a, MLOperand b);
+
+  MLOperand averagePool2d(MLOperand input, optional MLPool2dOptions options = {});
+  MLOperand maxPool2d(MLOperand input, optional MLPool2dOptions options = {});
+
+  MLOperand relu(MLOperand input);
+  MLOperator relu();
+
+  MLOperand reshape(MLOperand input, sequence<long> newShape);
+
+  MLOperand sigmoid(MLOperand x);
+  MLOperator sigmoid();
+
+  MLOperand softmax(MLOperand x);
+
+  MLGraph build(MLNamedOperands outputs);
+};

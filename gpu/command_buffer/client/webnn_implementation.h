@@ -31,7 +31,7 @@ namespace webnn {
 
 class WebnnWireServices;
 
-class WEBNN_EXPORT WebNNImplementation final : public WebNNInterface,
+class WEBNN_IMPLEMENTATION_EXPORT WebNNImplementation final : public WebNNInterface,
                                                public ImplementationBase {
  public:
   explicit WebNNImplementation(WebNNCmdHelper* helper,

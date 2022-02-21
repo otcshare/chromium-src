@@ -6,8 +6,7 @@
 
 [
   SecureContext,
-  ImplementedAs=NavigatorML,
-  RuntimeEnabled=MachineLearning
+  ImplementedAs=NavigatorML
 ] partial interface Navigator {
-  [SameObject] readonly attribute ML ml;
+  [SameObject, RuntimeEnabled=WebGPU] readonly attribute ML ml;
 };

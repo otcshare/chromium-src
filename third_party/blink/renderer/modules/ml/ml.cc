@@ -9,14 +9,18 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_context_options.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/core/frame/local_frame.h"
+#include "third_party/blink/renderer/modules/ml/webnn/webnn_instance.h"
 
 namespace blink {
 
 using ml::mojom::blink::LoadModelOptionsPtr;
 
 ML::ML(ExecutionContext* execution_context)
-    : execution_context_(execution_context),
-      remote_service_(execution_context_.Get()) {}
+    : ExecutionContextLifecycleObserver(execution_context),
+      execution_context_(execution_context),
+      remote_service_(execution_context_.Get()) {
+  webnn_instance_ = std::make_unique<WebnnInstance>();
+}
 
 void ML::Load(ScriptState* script_state,
               Vector<uint8_t>& model_content,
@@ -35,25 +39,41 @@ void ML::Trace(Visitor* visitor) const {
   visitor->Trace(execution_context_);
   visitor->Trace(remote_service_);
 
+  ExecutionContextLifecycleObserver::Trace(visitor);
   ScriptWrappable::Trace(visitor);
 }
 
-ScriptPromise ML::createContext(ScriptState* script_state,
-                                MLContextOptions* option,
-                                ExceptionState& exception_state) {
-  ScriptPromiseResolver* resolver =
-      MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+void ML::ContextDestroyed() {
+  webnn_instance_->ContextDestroyed();
+}
 
-  auto promise = resolver->Promise();
+MLContext* ML::createContext(MLContextOptions* option) {
+  // ScriptPromiseResolver* resolver =
+  //     MakeGarbageCollected<ScriptPromiseResolver>(script_state);
+  // auto promise = resolver->Promise();
+
+  // ExecutionContext* execution_context = ExecutionContext::From(script_state);
+  // WebNN implementation
+  WNNContext webnn_context =
+      webnn_instance_->CreateContext(execution_context_, option);
+  if (!webnn_context) {
+    // resolver->Resolve(v8::Null(script_state->GetIsolate()));
+    return nullptr;
+  }
 
   // Notice that currently, we just create the context in the renderer. In the
   // future we may add backend query ability to check whether a context is
   // supportable or not. At that time, this function will be truly asynced.
-  auto* ml_context =
-      MakeGarbageCollected<MLContext>(option->modelFormat(), this);
-  resolver->Resolve(ml_context);
+  auto* ml_context = MakeGarbageCollected<MLContext>(
+      execution_context_, webnn_instance_->GetWebnnControlClient(),
+      webnn_context, option->modelFormat(), this);
+  // resolver->Resolve(ml_context);
 
-  return promise;
+  return ml_context;
+}
+
+WNNInstance ML::GetInstance() const {
+  return webnn_instance_->GetInstance();
 }
 
 bool ML::BootstrapMojoConnectionIfNeeded(ScriptState* script_state,

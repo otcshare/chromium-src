@@ -1,0 +1,36 @@
+# Copyright 2022 The Chromium Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style license that can be
+# found in the LICENSE file.
+
+import("//third_party/blink/renderer/modules/modules.gni")
+
+blink_modules_sources("webnn") {
+  sources = [
+    "webnn_context.cc",
+    "webnn_context.h",
+    "webnn_enum_conversions.h",
+    "webnn_enum_conversions.cc",
+    "webnn_instance.cc",
+    "webnn_instance.h",
+    "webnn_object.cc",
+    "webnn_object.h",
+    "ml_out_of_memory_error.cc",
+    "ml_out_of_memory_error.h",
+    "ml_validation_error.cc",
+    "ml_validation_error.h",
+    "ml_uncaptured_error_event.h",
+    "ml_uncaptured_error_event.cc",
+    "ml_graph_builder.cc",
+    "ml_graph_builder.h",
+    "ml_graph.cc",
+    "ml_graph.h",
+    "ml_operand.cc",
+    "ml_operand.h",
+    "ml_operator.cc",
+    "ml_operator.h",
+  ]
+  deps = [
+    "//gpu/command_buffer/client:webnn_interface",
+    "//third_party/webnn/src/webnn:webnn_headers",
+  ]
+}

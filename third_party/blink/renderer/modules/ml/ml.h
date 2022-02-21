@@ -5,13 +5,13 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ML_ML_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ML_ML_H_
 
-#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/public/mojom/ml/ml.mojom-blink.h"
 #include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
+#include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
 #include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
 
@@ -20,8 +20,10 @@ namespace blink {
 class MLContextOptions;
 class ScriptPromise;
 class ScriptState;
+class WebnnInstance;
 
-class ML final : public ScriptWrappable {
+class ML final : public ScriptWrappable,
+                 public ExecutionContextLifecycleObserver {
   DEFINE_WRAPPERTYPEINFO();
 
  public:
@@ -38,12 +40,17 @@ class ML final : public ScriptWrappable {
             ExceptionState& exception_state,
             ml::mojom::blink::MLService::LoadCallback callback);
 
+  // ScriptWrappable overrides
   void Trace(blink::Visitor*) const override;
 
+  // ExecutionContextLifecycleObserver overrides
+  void ContextDestroyed() override;
+
   // IDL interface:
-  ScriptPromise createContext(ScriptState* state,
-                              MLContextOptions* option,
-                              ExceptionState& exception_state);
+  MLContext* createContext(MLContextOptions* option);
+
+  // WebNN Interface
+  WNNInstance GetInstance() const;
 
  private:
   // Bind the Mojo connection to browser process if needed.
@@ -55,6 +62,9 @@ class ML final : public ScriptWrappable {
   Member<ExecutionContext> execution_context_;
 
   HeapMojoRemote<ml::mojom::blink::MLService> remote_service_;
+
+  // WebNN Implementation
+  std::unique_ptr<WebnnInstance> webnn_instance_;
 };
 
 }  // namespace blink

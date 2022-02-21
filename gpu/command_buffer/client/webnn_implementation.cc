@@ -387,10 +387,7 @@ void WebNNImplementation::InjectInstance(uint32_t id, uint32_t generation) {
   // instance are seen first. ReserveInstance may reuse an existing ID.
   webnn_wire_->serializer()->Commit();
 
-  webnn_wire::ReservedInstance reservation =
-      webnn_wire_->wire_client()->ReserveInstance();
-
-  helper_->InjectInstance(reservation.id, reservation.generation);
+  helper_->InjectInstance(id, generation);
   helper_->Flush();
 }
 

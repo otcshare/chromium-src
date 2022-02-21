@@ -9,6 +9,7 @@
 #include "cc/test/stub_decode_cache.h"
 #include "components/viz/test/test_context_provider.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
+#include "gpu/command_buffer/client/webnn_interface.h"
 #include "gpu/command_buffer/common/capabilities.h"
 #include "gpu/config/gpu_feature_info.h"
 #include "testing/gmock/include/gmock/gmock.h"
@@ -50,6 +51,10 @@ class WebGraphicsContext3DProviderForTests
   gpu::webgpu::WebGPUInterface* WebGPUInterface() override {
     return webgpu_.get();
   }
+  gpu::webnn::WebNNInterface* WebNNInterface() override {
+    NOTREACHED();
+    return webnn_.get();
+  }
   bool BindToCurrentThread() override { return false; }
   const gpu::Capabilities& GetCapabilities() const override {
     return capabilities_;
@@ -81,6 +86,7 @@ class WebGraphicsContext3DProviderForTests
   cc::StubDecodeCache image_decode_cache_;
   std::unique_ptr<gpu::gles2::GLES2Interface> gl_;
   std::unique_ptr<gpu::webgpu::WebGPUInterface> webgpu_;
+  std::unique_ptr<gpu::webnn::WebNNInterface> webnn_;
   gpu::Capabilities capabilities_;
   gpu::GpuFeatureInfo gpu_feature_info_;
   WebglPreferences webgl_preferences_;

@@ -11,6 +11,7 @@
 #include "gpu/command_buffer/client/gles2_interface.h"
 #include "gpu/command_buffer/client/raster_interface.h"
 #include "gpu/command_buffer/client/webgpu_interface.h"
+#include "gpu/command_buffer/client/webnn_interface.h"
 #include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
 
 namespace cc {
@@ -47,6 +48,7 @@ class WebGraphicsContext3DProviderImpl
   gpu::gles2::GLES2Interface* ContextGL() override;
   gpu::raster::RasterInterface* RasterInterface() override;
   gpu::webgpu::WebGPUInterface* WebGPUInterface() override;
+  gpu::webnn::WebNNInterface* WebNNInterface() override;
   bool IsContextLost() override;
   GrDirectContext* GetGrContext() override;
   const gpu::Capabilities& GetCapabilities() const override;

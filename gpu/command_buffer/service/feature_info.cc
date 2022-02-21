@@ -971,6 +971,7 @@ void FeatureInfo::InitializeFeatures() {
       case CONTEXT_TYPE_WEBGL1:
       case CONTEXT_TYPE_WEBGL2:
       case CONTEXT_TYPE_WEBGPU:
+      case CONTEXT_TYPE_WEBNN:
         break;
     }
   }

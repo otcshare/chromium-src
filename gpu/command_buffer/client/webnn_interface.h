@@ -17,7 +17,7 @@ namespace gpu {
 namespace webnn {
 
 struct ReservedInstance {
-  MLInstance instance;
+  WNNInstance instance;
   uint32_t id;
   uint32_t generation;
 };

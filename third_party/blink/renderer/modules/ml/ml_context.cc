@@ -4,12 +4,20 @@
 
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
 
+#include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 
 namespace blink {
 
-MLContext::MLContext(const AtomicString model_format, ML* ml)
-    : model_format_(model_format), ml_(ml) {}
+MLContext::MLContext(
+    ExecutionContext* execution_context,
+    scoped_refptr<WebnnControlClientHolder> webnn_control_client,
+    WNNContext webnn_context,
+    const AtomicString model_format,
+    ML* ml)
+    : WebnnContext(execution_context, webnn_control_client, webnn_context),
+      model_format_(model_format),
+      ml_(ml) {}
 
 MLContext::~MLContext() = default;
 
@@ -25,6 +33,7 @@ void MLContext::Trace(Visitor* visitor) const {
   visitor->Trace(ml_);
 
   ScriptWrappable::Trace(visitor);
+  WebnnContext::Trace(visitor);
 }
 
 }  // namespace blink

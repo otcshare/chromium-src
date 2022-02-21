@@ -50,6 +50,10 @@ class RasterInterface;
 namespace webgpu {
 class WebGPUInterface;
 }  // namespace webgpu
+
+namespace webnn {
+class WebNNInterface;
+}  // namespace webnn
 }  // namespace gpu
 
 namespace skia_bindings {
@@ -103,6 +107,7 @@ class ContextProviderCommandBuffer
   void RemoveObserver(ContextLostObserver* obs) override;
 
   gpu::webgpu::WebGPUInterface* WebGPUInterface();
+  gpu::webnn::WebNNInterface* WebNNInterface();
 
   // base::trace_event::MemoryDumpProvider implementation.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
@@ -168,6 +173,7 @@ class ContextProviderCommandBuffer
   std::unique_ptr<gpu::gles2::GLES2TraceImplementation> trace_impl_;
   std::unique_ptr<gpu::raster::RasterInterface> raster_interface_;
   std::unique_ptr<gpu::webgpu::WebGPUInterface> webgpu_interface_;
+  std::unique_ptr<gpu::webnn::WebNNInterface> webnn_interface_;
 
   std::unique_ptr<skia_bindings::GrContextForGLES2Interface> gr_context_;
 #if BUILDFLAG(SKIA_USE_DAWN)

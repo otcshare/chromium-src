@@ -6,7 +6,7 @@
 
 // This is different with the specification of WebNN because in the first
 // version we do not involve any hardware acceleration.
-typedef ArrayBufferView MLBufferView;
+typedef (ArrayBufferView or MLBufferResourceView) MLBufferView;
 
 // This is different with the specification of WebNN because in the first
 // version we do not involve any hardware acceleration.
@@ -14,5 +14,5 @@ typedef MLBufferView MLResource;
 
 dictionary MLInput {
   required MLResource resource;
-  required sequence<long> dimensions;
+  sequence<long> dimensions;
 };

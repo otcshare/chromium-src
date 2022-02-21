@@ -97,8 +97,7 @@ ScriptPromise MLModelLoader::load(ScriptState* script_state,
       model_content[i] = static_cast<uint8_t*>(buffer->Data())[i];
     }
     // Transforms load model options.
-    auto options_mojo =
-        mojo::ConvertTo<ml::mojom::blink::LoadModelOptionsPtr>(options);
+    auto options_mojo = nullptr;
 
     ml_context_->GetML()->Load(
         script_state, model_content, std::move(options_mojo), exception_state,

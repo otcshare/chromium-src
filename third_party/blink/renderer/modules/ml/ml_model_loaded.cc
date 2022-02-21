@@ -30,7 +30,7 @@ void OnComputeResult(
   HeapVector<std::pair<String, Member<MLTensor>>> outputs_blink;
   for (const auto& output_mojo : outputs.value()) {
     outputs_blink.emplace_back(
-        output_mojo.key, mojo::ConvertTo<MLTensor*>(output_mojo.value));
+        output_mojo.key, nullptr);
   }
 
   resolver->Resolve(std::move(outputs_blink));
@@ -58,7 +58,7 @@ ScriptPromise MLModelLoaded::compute(
   for (const auto& name_tensor : inputs) {
     input_mojo.insert(
         name_tensor.first,
-        mojo::ConvertTo<ml::mojom::blink::TensorPtr>(name_tensor.second.Get()));
+        nullptr);
   }
 
   remote_service_->Compute(

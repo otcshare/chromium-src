@@ -65,6 +65,10 @@ class RasterInterface;
 namespace webgpu {
 class WebGPUInterface;
 }
+
+namespace webnn {
+class WebNNInterface;
+}
 }  // namespace gpu
 
 namespace viz {
@@ -96,6 +100,7 @@ class WebGraphicsContext3DProvider {
   virtual gpu::gles2::GLES2Interface* ContextGL() = 0;
   virtual gpu::raster::RasterInterface* RasterInterface() = 0;
   virtual gpu::webgpu::WebGPUInterface* WebGPUInterface() = 0;
+  virtual gpu::webnn::WebNNInterface* WebNNInterface() = 0;
   virtual bool IsContextLost() = 0;  // Has the GPU driver lost this context?
   virtual bool BindToCurrentThread() = 0;
   virtual GrDirectContext* GetGrContext() = 0;
