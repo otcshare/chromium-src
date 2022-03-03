@@ -8,6 +8,7 @@
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_clamp_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_conv_2d_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_gemm_options.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_batch_normalization_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_input.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_leaky_relu_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_operand_descriptor.h"
@@ -140,7 +141,7 @@ WNNGemmOptions AsWebnnType(const MLGemmOptions* gemm_options) {
 }
 
 WNNPool2dOptions AsWebnnType(const MLPool2dOptions* pool2d_options) {
-  WNNPool2dOptions webnn_pool2d_options;
+  WNNPool2dOptions webnn_pool2d_options = {};
   webnn_pool2d_options.windowDimensions =
       pool2d_options->hasWindowDimensions()
           ? pool2d_options->windowDimensions().data()
@@ -222,6 +223,44 @@ WNNInput AsWebnnType(const MLInputResource* buffer) {
   return webnn_input;
 }
 
+WNNBatchNormOptions AsWebnnType(
+    const MLBatchNormalizationOptions* batch_norm_options) {
+  WNNBatchNormOptions webnn_batch_norm_options;
+  webnn_batch_norm_options.scale =
+      batch_norm_options->hasScale() ? batch_norm_options->scale()->GetHandle()
+                                     : nullptr;
+  webnn_batch_norm_options.bias = batch_norm_options->hasBias()
+                                      ? batch_norm_options->bias()->GetHandle()
+                                      : nullptr;
+  webnn_batch_norm_options.axis = batch_norm_options->axis();
+  webnn_batch_norm_options.epsilon = batch_norm_options->epsilon();
+  webnn_batch_norm_options.activation =
+      batch_norm_options->hasActivation()
+          ? batch_norm_options->activation()->GetHandle()
+          : nullptr;
+  return webnn_batch_norm_options;
+}
+
+// WNNPadOptions AsDawnType(const MLPadOptions* pad_options) {
+//   WNNPadOptions webnn_pad_options;
+//   switch (pad_options->mode().AsEnum()) {
+//     case V8MLPaddingMode::Enum::kConstant:
+//       webnn_pad_options.mode = WNNPaddingMode_Constant;
+//       break;
+//     case V8MLPaddingMode::Enum::kEdge:
+//       webnn_pad_options.mode = WNNPaddingMode_Edge;
+//       break;
+//     case V8MLPaddingMode::Enum::kReflection:
+//       webnn_pad_options.mode = WNNPaddingMode_Reflection;
+//       break;
+//     case V8MLPaddingMode::Enum::kSymmetric:
+//       webnn_pad_options.mode = WNNPaddingMode_Symmetric;
+//       break;
+//   }
+//   webnn_pad_options.value = pad_options->value();
+//   return webnn_pad_options;
+// }
+
 // static
 MLGraphBuilder* MLGraphBuilder::Create(MLContext* context) {
   // Get WebNNInstance
@@ -268,6 +307,68 @@ MLOperand* MLGraphBuilder::constant(const MLOperandDescriptor* desc,
 MLOperand* MLGraphBuilder::add(const MLOperand* a, const MLOperand* b) {
   WNNOperand webnn_output =
       GetProcs().graphBuilderAdd(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::sub(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderSub(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::mul(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderMul(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::div(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderDiv(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::max(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderMax(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::min(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderMin(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::pow(const MLOperand* a, const MLOperand* b) {
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderPow(GetHandle(), a->GetHandle(), b->GetHandle());
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
+
+MLOperand* MLGraphBuilder::batchNormalization(
+    const MLOperand* input,
+    const MLOperand* mean,
+    const MLOperand* variance,
+    const MLBatchNormalizationOptions* options) {
+  WNNBatchNormOptions webnn_batch_norm_options = AsWebnnType(options);
+  WNNOperand webnn_output = GetProcs().graphBuilderBatchNorm(
+      GetHandle(), input->GetHandle(), mean->GetHandle(), variance->GetHandle(),
+      &webnn_batch_norm_options);
   MLOperand* output =
       MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
   return output;
@@ -385,6 +486,18 @@ MLOperand* MLGraphBuilder::maxPool2d(const MLOperand* input,
       MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
   return output;
 }
+
+// MLOperand* MLGraphBuilder::pad(const MLOperand* input,
+//                                const Vector<uint32_t>& padding,
+//                                const MLPadOptions* options) {
+//   WNNPadOptions webnn_pad_options = AsWebnnType(options);
+//   WNNOperand webnn_output = GetProcs().graphBuilderPad(
+//       GetHandle(), input->GetHandle(), padding.data(),
+//       static_cast<uint32_t>(padding.size()), &webnn_pad_options);
+//   MLOperand* output =
+//       MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+//   return output;
+// }
 
 MLOperand* MLGraphBuilder::relu(const MLOperand* input) {
   WNNOperand webnn_output =

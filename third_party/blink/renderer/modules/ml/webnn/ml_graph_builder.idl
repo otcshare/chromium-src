@@ -1,24 +1,19 @@
 typedef record<DOMString, MLOperand> MLNamedOperands;
 
 // typedef MLBufferResourceView MLBufferView;
-
-enum MLInputOperandLayout {
-  "nchw",
-  "nhwc"
+dictionary MLBatchNormalizationOptions {
+  MLOperand scale;
+  MLOperand bias;
+  long axis = 1;
+  float epsilon = 1e-5;
+  MLOperator activation;
 };
 
-enum MLConv2dFilterOperandLayout {
-  "oihw",
-  "hwio",
-  "ohwi",
-  "ihwo"
-};
+enum MLInputOperandLayout { "nchw", "nhwc" };
 
-enum MLAutoPad {
-  "explicit",
-  "same-upper",
-  "same-lower"
-};
+enum MLConv2dFilterOperandLayout { "oihw", "hwio", "ohwi", "ihwo" };
+
+enum MLAutoPad { "explicit", "same-upper", "same-lower" };
 
 dictionary MLConv2dOptions {
   sequence<long> padding;
@@ -58,8 +53,19 @@ dictionary MLPool2dOptions {
   MLInputOperandLayout layout = "nchw";
 };
 
-[Exposed(Window WebGPU, Worker WebGPU)]
-interface MLGraphBuilder {
+enum MLPaddingMode {
+  "constant",
+  "edge",
+  "reflection",
+  "symmetric"
+};
+
+dictionary MLPadOptions {
+  MLPaddingMode mode = "constant";
+  float value = 0;
+};
+
+[Exposed(Window WebGPU, Worker WebGPU)] interface MLGraphBuilder {
   constructor(MLContext context);
 
   MLOperand input(DOMString name, MLOperandDescriptor desc);
@@ -67,13 +73,24 @@ interface MLGraphBuilder {
   MLOperand constant(MLOperandDescriptor desc, MLBufferView bufferView);
 
   MLOperand add(MLOperand a, MLOperand b);
+  MLOperand sub(MLOperand a, MLOperand b);
+  MLOperand mul(MLOperand a, MLOperand b);
+  MLOperand div(MLOperand a, MLOperand b);
+  MLOperand max(MLOperand a, MLOperand b);
+  MLOperand min(MLOperand a, MLOperand b);
+  MLOperand pow(MLOperand a, MLOperand b);
+
+  MLOperand batchNormalization(
+      MLOperand input, MLOperand mean, MLOperand variance,
+      optional MLBatchNormalizationOptions options = {});
 
   MLOperand clamp(MLOperand x, optional MLClampOptions options = {});
   MLOperator clamp(optional MLClampOptions options = {});
 
   MLOperand concat(sequence<MLOperand> inputs, long axis);
 
-  MLOperand conv2d(MLOperand input, MLOperand filter, optional MLConv2dOptions options = {});
+  MLOperand conv2d(MLOperand input, MLOperand filter,
+                   optional MLConv2dOptions options = {});
 
   MLOperand gemm(MLOperand a, MLOperand b, optional MLGemmOptions options = {});
 
@@ -82,8 +99,12 @@ interface MLGraphBuilder {
 
   MLOperand matmul(MLOperand a, MLOperand b);
 
-  MLOperand averagePool2d(MLOperand input, optional MLPool2dOptions options = {});
+  MLOperand averagePool2d(MLOperand input,
+                          optional MLPool2dOptions options = {});
   MLOperand maxPool2d(MLOperand input, optional MLPool2dOptions options = {});
+
+//   MLOperand pad(MLOperand input, sequence<unsigned long> padding,
+//                 optional MLPadOptions options = {});
 
   MLOperand relu(MLOperand input);
   MLOperator relu();
