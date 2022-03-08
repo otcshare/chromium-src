@@ -80,13 +80,13 @@ void* WebnnClientSerializer::GetCmdSpace(size_t size) {
 
 void WebnnClientSerializer::Commit() {
   if (buffer_.valid()) {
-    TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-                 "WebnnClientSerializer::Flush", "bytes", put_offset_);
+    // TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+    //              "WebnnClientSerializer::Flush", "bytes", put_offset_);
 
-    TRACE_EVENT_WITH_FLOW0(
-        TRACE_DISABLED_BY_DEFAULT("gpu.webnn"), "WebnnCommands",
-        (static_cast<uint64_t>(buffer_.shm_id()) << 32) + buffer_.offset(),
-        TRACE_EVENT_FLAG_FLOW_OUT);
+    // TRACE_EVENT_WITH_FLOW0(
+    //     TRACE_DISABLED_BY_DEFAULT("gpu.webnn"), "WebnnCommands",
+    //     (static_cast<uint64_t>(buffer_.shm_id()) << 32) + buffer_.offset(),
+    //     TRACE_EVENT_FLAG_FLOW_OUT);
 
     buffer_.Shrink(put_offset_);
     helper_->WebnnCommands(buffer_.shm_id(), buffer_.offset(), put_offset_);

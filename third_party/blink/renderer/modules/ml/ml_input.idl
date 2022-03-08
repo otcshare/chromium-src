@@ -6,7 +6,7 @@
 
 // This is different with the specification of WebNN because in the first
 // version we do not involve any hardware acceleration.
-typedef (ArrayBufferView or MLBufferResourceView) MLBufferView;
+typedef ([AllowShared] ArrayBufferView or MLBufferResourceView) MLBufferView;
 
 // This is different with the specification of WebNN because in the first
 // version we do not involve any hardware acceleration.

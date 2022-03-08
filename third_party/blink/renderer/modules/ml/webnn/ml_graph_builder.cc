@@ -4,18 +4,19 @@
 
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph_builder.h"
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_batch_normalization_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_buffer_resource_view.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_clamp_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_conv_2d_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_gemm_options.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_batch_normalization_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_input.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_leaky_relu_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_operand_descriptor.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_operand_type.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_pad_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_pool_2d_options.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferview_mlbufferresourceview.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferview_mlbufferresourceview_mlinput.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferviewallowshared_mlbufferresourceview.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferviewallowshared_mlbufferresourceview_mlinput.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph.h"
@@ -46,8 +47,10 @@ WNNOperandDescriptor AsWebnnType(const MLOperandDescriptor* desc) {
       webnn_desc.type = WNNOperandType_Uint8;
       break;
   }
-  webnn_desc.dimensions = desc->dimensions().data();
-  webnn_desc.dimensionsCount = desc->dimensions().size();
+  webnn_desc.dimensions =
+      desc->hasDimensions() ? desc->dimensions().data() : nullptr;
+  webnn_desc.dimensionsCount =
+      desc->hasDimensions() ? desc->dimensions().size() : 0;
   return webnn_desc;
 }
 
@@ -177,9 +180,9 @@ WNNArrayBufferView AsWebnnType(const MLBufferResourceView* resource) {
   return webnn_buffer;
 }
 
-WNNArrayBufferView AsWebnnType(const NotShared<DOMArrayBufferView>& resource) {
+WNNArrayBufferView AsWebnnType(const MaybeShared<DOMArrayBufferView>& resource) {
   WNNArrayBufferView webnn_buffer;
-  webnn_buffer.buffer = resource->BaseAddress();
+  webnn_buffer.buffer = resource->BaseAddressMaybeShared();
   webnn_buffer.byteLength = resource->byteLength();
   webnn_buffer.byteOffset = resource->byteOffset();
   return webnn_buffer;
@@ -188,8 +191,8 @@ WNNArrayBufferView AsWebnnType(const NotShared<DOMArrayBufferView>& resource) {
 WNNArrayBufferView AsWebnnType(const MLResource* buffer) {
   DCHECK(buffer);
   switch (buffer->GetContentType()) {
-    case MLResource::ContentType::kArrayBufferView:
-      return AsWebnnType(buffer->GetAsArrayBufferView());
+    case MLResource::ContentType::kArrayBufferViewAllowShared:
+      return AsWebnnType(buffer->GetAsArrayBufferViewAllowShared());
     case MLResource::ContentType::kMLBufferResourceView:
       NOTREACHED();
       return {};
@@ -202,8 +205,8 @@ WNNInput AsWebnnType(const MLInputResource* buffer) {
   DCHECK(buffer);
   WNNInput webnn_input = {};
   switch (buffer->GetContentType()) {
-    case MLInputResource::ContentType::kArrayBufferView:
-      webnn_input.resource = AsWebnnType(buffer->GetAsArrayBufferView());
+    case MLInputResource::ContentType::kArrayBufferViewAllowShared:
+      webnn_input.resource = AsWebnnType(buffer->GetAsArrayBufferViewAllowShared());
       break;
     case MLInputResource::ContentType::kMLBufferResourceView:
       NOTREACHED();
@@ -241,25 +244,25 @@ WNNBatchNormOptions AsWebnnType(
   return webnn_batch_norm_options;
 }
 
-// WNNPadOptions AsDawnType(const MLPadOptions* pad_options) {
-//   WNNPadOptions webnn_pad_options;
-//   switch (pad_options->mode().AsEnum()) {
-//     case V8MLPaddingMode::Enum::kConstant:
-//       webnn_pad_options.mode = WNNPaddingMode_Constant;
-//       break;
-//     case V8MLPaddingMode::Enum::kEdge:
-//       webnn_pad_options.mode = WNNPaddingMode_Edge;
-//       break;
-//     case V8MLPaddingMode::Enum::kReflection:
-//       webnn_pad_options.mode = WNNPaddingMode_Reflection;
-//       break;
-//     case V8MLPaddingMode::Enum::kSymmetric:
-//       webnn_pad_options.mode = WNNPaddingMode_Symmetric;
-//       break;
-//   }
-//   webnn_pad_options.value = pad_options->value();
-//   return webnn_pad_options;
-// }
+WNNPadOptions AsWebnnType(const MLPadOptions* pad_options) {
+  WNNPadOptions webnn_pad_options;
+  switch (pad_options->mode().AsEnum()) {
+    case V8MLPaddingMode::Enum::kConstant:
+      webnn_pad_options.mode = WNNPaddingMode_Constant;
+      break;
+    case V8MLPaddingMode::Enum::kEdge:
+      webnn_pad_options.mode = WNNPaddingMode_Edge;
+      break;
+    case V8MLPaddingMode::Enum::kReflection:
+      webnn_pad_options.mode = WNNPaddingMode_Reflection;
+      break;
+    case V8MLPaddingMode::Enum::kSymmetric:
+      webnn_pad_options.mode = WNNPaddingMode_Symmetric;
+      break;
+  }
+  webnn_pad_options.value = pad_options->value();
+  return webnn_pad_options;
+}
 
 // static
 MLGraphBuilder* MLGraphBuilder::Create(MLContext* context) {
@@ -487,17 +490,17 @@ MLOperand* MLGraphBuilder::maxPool2d(const MLOperand* input,
   return output;
 }
 
-// MLOperand* MLGraphBuilder::pad(const MLOperand* input,
-//                                const Vector<uint32_t>& padding,
-//                                const MLPadOptions* options) {
-//   WNNPadOptions webnn_pad_options = AsWebnnType(options);
-//   WNNOperand webnn_output = GetProcs().graphBuilderPad(
-//       GetHandle(), input->GetHandle(), padding.data(),
-//       static_cast<uint32_t>(padding.size()), &webnn_pad_options);
-//   MLOperand* output =
-//       MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
-//   return output;
-// }
+MLOperand* MLGraphBuilder::pad(const MLOperand* input,
+                               const MLOperand* padding,
+                               const MLPadOptions* options) {
+  WNNPadOptions webnn_pad_options = AsWebnnType(options);
+  WNNOperand webnn_output =
+      GetProcs().graphBuilderPad(GetHandle(), input->GetHandle(),
+                                 padding->GetHandle(), &webnn_pad_options);
+  MLOperand* output =
+      MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
+  return output;
+}
 
 MLOperand* MLGraphBuilder::relu(const MLOperand* input) {
   WNNOperand webnn_output =

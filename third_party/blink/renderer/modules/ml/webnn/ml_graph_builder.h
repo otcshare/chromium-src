@@ -20,16 +20,17 @@ class MLConv2dOptions;
 class MLGemmOptions;
 class MLLeakyReluOptions;
 class MLBatchNormalizationOptions;
+class MLPadOptions;
 class MLPool2dOptions;
 class MLOperand;
 class MLOperandDescriptor;
 class MLOperator;
 class MLGraph;
-class V8UnionArrayBufferViewOrMLBufferResourceViewOrMLInput;
-class V8UnionArrayBufferViewOrMLBufferResourceView;
+class V8UnionArrayBufferViewAllowSharedOrMLBufferResourceViewOrMLInput;
+class V8UnionArrayBufferViewAllowSharedOrMLBufferResourceView;
 
-typedef V8UnionArrayBufferViewOrMLBufferResourceViewOrMLInput MLInputResource;
-typedef V8UnionArrayBufferViewOrMLBufferResourceView MLResource;
+typedef V8UnionArrayBufferViewAllowSharedOrMLBufferResourceViewOrMLInput MLInputResource;
+typedef V8UnionArrayBufferViewAllowSharedOrMLBufferResourceView MLResource;
 
 WNNInput AsWebnnType(const MLInputResource* input);
 WNNArrayBufferView AsWebnnType(const MLResource* resource);
@@ -96,9 +97,9 @@ class MLGraphBuilder : public WebnnObject<WNNGraphBuilder> {
                            const MLPool2dOptions* options);
   MLOperand* maxPool2d(const MLOperand* input, const MLPool2dOptions* options);
 
-//   MLOperand* pad(const MLOperand* input,
-//                  const Vector<uint32_t>& padding,
-//                  const MLPadOptions* options);
+  MLOperand* pad(const MLOperand* input,
+                 const MLOperand* padding,
+                 const MLPadOptions* options);
 
   MLOperand* relu(const MLOperand* input);
 

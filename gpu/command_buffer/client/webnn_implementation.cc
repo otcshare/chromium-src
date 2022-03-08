@@ -297,14 +297,14 @@ void WebNNImplementation::OnGpuControlReturnData(
     return;
   }
 
-  static uint32_t return_trace_id = 0;
-  TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-                         "WebnnReturnCommands", return_trace_id++,
-                         TRACE_EVENT_FLAG_FLOW_IN);
+  // static uint32_t return_trace_id = 0;
+  // TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+  //                        "WebnnReturnCommands", return_trace_id++,
+  //                        TRACE_EVENT_FLAG_FLOW_IN);
 
-  TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-               "WebNNImplementation::OnGpuControlReturnData", "bytes",
-               data.size());
+  // TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+  //              "WebNNImplementation::OnGpuControlReturnData", "bytes",
+  //              data.size());
 
   CHECK_GT(data.size(), sizeof(cmds::WebnnReturnDataHeader));
 

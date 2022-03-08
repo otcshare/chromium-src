@@ -240,7 +240,8 @@ vars = {
   'boringssl_git': 'https://boringssl.googlesource.com',
   'chromium_git': 'https://chromium.googlesource.com',
   'dawn_git': 'https://dawn.googlesource.com',
-  'webnn_git': 'https://github.com/fujunwei',
+  'webnn_git': 'https://github.com/webmachinelearning',
+  'gpgmm_git': 'https://github.com/intel',
   'pdfium_git': 'https://pdfium.googlesource.com',
   'quiche_git': 'https://quiche.googlesource.com',
   'skia_git': 'https://skia.googlesource.com',
@@ -368,7 +369,11 @@ vars = {
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
-  'webnn_revision': '409bec2aa98e75cf1aa1e8a74be0befd44decc42',
+  'webnn_revision': '386d88398e5fc9279afda684549b00f9db040072',
+  # Three lines of non-changing comments so that
+  # the commit queue can handle CLs rolling feed
+  # and whatever else without interference from each other.
+  'gpgmm_revision': '1e5ae00712c8f91e209864027818e26093df9f45',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
@@ -929,7 +934,10 @@ deps = {
     Var('dawn_git') + '/dawn.git' + '@' +  Var('dawn_revision'),
 
   'src/third_party/webnn':
-    Var('webnn_git') + '/webnn-native-1.git' + '@' +  Var('webnn_revision'),
+    Var('webnn_git') + '/webnn-native.git' + '@' +  Var('webnn_revision'),
+
+  'src/third_party/gpgmm':
+    Var('gpgmm_git') + '/gpgmm.git' + '@' +  Var('gpgmm_revision'),
 
   'src/third_party/libjxl/src':
     Var('chromium_git') + '/external/gitlab.com/wg1/jpeg-xl.git' + '@' + Var('libjxl_revision'),

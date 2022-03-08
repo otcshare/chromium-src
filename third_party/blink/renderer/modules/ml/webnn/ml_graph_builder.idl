@@ -103,8 +103,8 @@ dictionary MLPadOptions {
                           optional MLPool2dOptions options = {});
   MLOperand maxPool2d(MLOperand input, optional MLPool2dOptions options = {});
 
-//   MLOperand pad(MLOperand input, sequence<unsigned long> padding,
-//                 optional MLPadOptions options = {});
+  MLOperand pad(MLOperand input, MLOperand padding,
+                optional MLPadOptions options = {});
 
   MLOperand relu(MLOperand input);
   MLOperator relu();

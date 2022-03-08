@@ -101,13 +101,13 @@ void* WireServerCommandSerializer::GetCmdSpace(size_t size) {
 
 bool WireServerCommandSerializer::Flush() {
   if (put_offset_ > kWebnnReturnCmdsOffset) {
-    TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-                 "WireServerCommandSerializer::Flush", "bytes", put_offset_);
+    // TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+    //              "WireServerCommandSerializer::Flush", "bytes", put_offset_);
 
-    static uint32_t return_trace_id = 0;
-    TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-                           "WebnnReturnCommands", return_trace_id++,
-                           TRACE_EVENT_FLAG_FLOW_OUT);
+    // static uint32_t return_trace_id = 0;
+    // TRACE_EVENT_WITH_FLOW0(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+    //                        "WebnnReturnCommands", return_trace_id++,
+    //                        TRACE_EVENT_FLAG_FLOW_OUT);
 
     client_->HandleReturnData(base::make_span(buffer_.data(), put_offset_));
     put_offset_ = kWebnnReturnCmdsOffset;
@@ -517,13 +517,13 @@ error::Error WebNNDecoderImpl::HandleWebnnCommands(
     return error::kOutOfBounds;
   }
 
-  TRACE_EVENT_WITH_FLOW0(
-      TRACE_DISABLED_BY_DEFAULT("gpu.webnn"), "WebnnCommands",
-      (static_cast<uint64_t>(commands_shm_id) << 32) + commands_shm_offset,
-      TRACE_EVENT_FLAG_FLOW_IN);
+  // TRACE_EVENT_WITH_FLOW0(
+  //     TRACE_DISABLED_BY_DEFAULT("gpu.webnn"), "WebnnCommands",
+  //     (static_cast<uint64_t>(commands_shm_id) << 32) + commands_shm_offset,
+  //     TRACE_EVENT_FLAG_FLOW_IN);
 
-  TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
-               "WebNNDecoderImpl::HandleWebnnCommands", "bytes", size);
+  // TRACE_EVENT1(TRACE_DISABLED_BY_DEFAULT("gpu.webnn"),
+  //              "WebNNDecoderImpl::HandleWebnnCommands", "bytes", size);
 
   if (!wire_server_->HandleCommands(shm_commands, size)) {
     NOTREACHED();

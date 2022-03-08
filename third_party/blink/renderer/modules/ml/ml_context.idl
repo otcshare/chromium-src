@@ -5,9 +5,9 @@
 // https://github.com/webmachinelearning/model-loader/blob/main/explainer.md
 
 [
-  RuntimeEnabled=MachineLearning,
+  RuntimeEnabled=WebGPU,
   SecureContext,
-  Exposed=(Window, DedicatedWorker)
+  Exposed(Window WebGPU, Worker WebGPU)
 ] interface MLContext {
   readonly attribute DOMString modelFormat;
 };

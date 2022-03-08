@@ -5,8 +5,6 @@
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph.h"
 
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_buffer_resource_view.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferview_mlbufferresourceview.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferview_mlbufferresourceview_mlinput.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
@@ -27,6 +25,9 @@ ScriptPromise MLGraph::computeAsync(ScriptState* script_state,
   auto* resolver = MakeGarbageCollected<ScriptPromiseResolver>(script_state);
   ScriptPromise promise = resolver->Promise();
 
+  // TODO: 1, Release WNNNamedInputs and WNNNamedOutputs memory
+  // 2, Should MLNamedInputs or WNNNamedOutputs be created for every
+  // computation.
   WNNNamedInputs webnn_inputs = CreateAndPopulateNamedInputs(inputs);
   WNNNamedOutputs webnn_outputs = CreateAndPopulateNamedOutputs(outputs);
   auto* callback =
