@@ -8,3 +8,4 @@
 // completely ignored.
 GL_APICALL void GL_APIENTRY wnWebnnCommands (const char* commands, size_t size);
 GL_APICALL void GL_APIENTRY wnInjectInstance (void);
+GL_APICALL void GL_APIENTRY wnInjectDawnWireServer (void);

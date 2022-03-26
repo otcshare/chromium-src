@@ -85,11 +85,8 @@ GPUBuffer* GPUBuffer::Create(GPUDevice* device,
   return buffer;
 }
 
-GPUBuffer::GPUBuffer(GPUDevice* device,
-                     uint64_t size,
-                     WGPUBuffer buffer)
-    : DawnObject<WGPUBuffer>(device, buffer), size_(size) {
-}
+GPUBuffer::GPUBuffer(GPUDevice* device, uint64_t size, WGPUBuffer buffer)
+    : DawnObject<WGPUBuffer>(device, buffer), size_(size) {}
 
 void GPUBuffer::Trace(Visitor* visitor) const {
   visitor->Trace(mapped_array_buffers_);
@@ -138,6 +135,12 @@ void GPUBuffer::destroy(ScriptState* script_state) {
 void GPUBuffer::Destroy(v8::Isolate* isolate) {
   ResetMappingState(isolate);
   GetProcs().bufferDestroy(GetHandle());
+}
+
+std::tuple<uint32_t, uint32_t> GPUBuffer::GetBufferId() {
+  gpu::webgpu::WebGPUInterface* webgpu =
+      GetContextProviderWeakPtr()->ContextProvider()->WebGPUInterface();
+  return webgpu->GetBufferId(GetHandle());
 }
 
 ScriptPromise GPUBuffer::MapAsyncImpl(ScriptState* script_state,

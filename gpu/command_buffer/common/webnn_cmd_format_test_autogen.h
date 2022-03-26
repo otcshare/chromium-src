@@ -40,4 +40,16 @@ TEST_F(WebNNFormatTest, InjectInstance) {
   CheckBytesWrittenMatchesExpectedSize(next_cmd, sizeof(cmd));
 }
 
+TEST_F(WebNNFormatTest, InjectDawnWireServer) {
+  cmds::InjectDawnWireServer& cmd = *GetBufferAs<cmds::InjectDawnWireServer>();
+  void* next_cmd =
+      cmd.Set(&cmd, static_cast<int>(11), static_cast<int32_t>(12));
+  EXPECT_EQ(static_cast<uint32_t>(cmds::InjectDawnWireServer::kCmdId),
+            cmd.header.command);
+  EXPECT_EQ(sizeof(cmd), cmd.header.size * 4u);
+  EXPECT_EQ(static_cast<int>(11), cmd.channel_id);
+  EXPECT_EQ(static_cast<int32_t>(12), cmd.route_id);
+  CheckBytesWrittenMatchesExpectedSize(next_cmd, sizeof(cmd));
+}
+
 #endif  // GPU_COMMAND_BUFFER_COMMON_WEBNN_CMD_FORMAT_TEST_AUTOGEN_H_

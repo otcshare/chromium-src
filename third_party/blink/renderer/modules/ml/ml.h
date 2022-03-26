@@ -10,6 +10,7 @@
 #include "third_party/blink/renderer/core/execution_context/execution_context.h"
 #include "third_party/blink/renderer/core/frame/navigator.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_device.h"
 #include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
 #include "third_party/blink/renderer/platform/heap/visitor.h"
@@ -48,6 +49,7 @@ class ML final : public ScriptWrappable,
 
   // IDL interface:
   MLContext* createContext(MLContextOptions* option);
+  MLContext* createContext(GPUDevice* device);
 
   // WebNN Interface
   WNNInstance GetInstance() const;

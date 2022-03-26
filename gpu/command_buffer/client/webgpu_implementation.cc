@@ -413,8 +413,7 @@ void WebGPUImplementation::OnGpuControlReturnData(
       }
       if (returned_adapter_info->adapter_properties_size > 0) {
         if (!dawn_wire::DeserializeWGPUDeviceProperties(
-                &adapter_properties,
-                deserialized_buffer,
+                &adapter_properties, deserialized_buffer,
                 returned_adapter_info->adapter_properties_size)) {
           adapter_service_id = -1;
           adapter_properties = {};
@@ -637,6 +636,28 @@ void WebGPUImplementation::RequestDeviceAsync(
                          serialized_device_properties_size);
   buffer.Release();
   helper_->Flush();
+#endif
+}
+
+std::tuple<uint32_t, uint32_t> WebGPUImplementation::GetDeviceId(
+    WGPUDevice device) {
+#if BUILDFLAG(USE_DAWN)
+  dawn_wire_->serializer()->Commit();
+  return dawn_wire_->wire_client()->GetDeviceId(device);
+#else
+  NOTREACHED();
+  return {};
+#endif
+}
+
+std::tuple<uint32_t, uint32_t> WebGPUImplementation::GetBufferId(
+    WGPUBuffer buffer) {
+#if BUILDFLAG(USE_DAWN)
+  dawn_wire_->serializer()->Commit();
+  return dawn_wire_->wire_client()->GetBufferId(buffer);
+#else
+  NOTREACHED();
+  return {};
 #endif
 }
 

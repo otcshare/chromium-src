@@ -125,6 +125,7 @@ class WEBNN_IMPLEMENTATION_EXPORT WebNNImplementation final : public WebNNInterf
   scoped_refptr<APIChannel> GetAPIChannel() const override;
   ReservedInstance ReserveInstance() override;
   void InjectInstance(uint32_t id, uint32_t generation) override;
+  void InjectDawnWireServer(int channel_id, int32_t route_id) override;
 
  private:
   const char* GetLogPrefix() const { return "webnn"; }

@@ -11,9 +11,10 @@
 #ifndef GPU_COMMAND_BUFFER_COMMON_WEBNN_CMD_IDS_AUTOGEN_H_
 #define GPU_COMMAND_BUFFER_COMMON_WEBNN_CMD_IDS_AUTOGEN_H_
 
-#define WEBNN_COMMAND_LIST(OP) \
-  OP(WebnnCommands)  /* 256 */ \
-  OP(InjectInstance) /* 257 */
+#define WEBNN_COMMAND_LIST(OP)       \
+  OP(WebnnCommands)        /* 256 */ \
+  OP(InjectInstance)       /* 257 */ \
+  OP(InjectDawnWireServer) /* 258 */
 
 enum CommandId {
   kOneBeforeStartPoint =

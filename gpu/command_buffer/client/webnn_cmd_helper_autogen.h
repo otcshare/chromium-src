@@ -27,4 +27,12 @@ void InjectInstance(uint32_t instance_id, uint32_t instance_generation) {
   }
 }
 
+void InjectDawnWireServer(int channel_id, int32_t route_id) {
+  webnn::cmds::InjectDawnWireServer* c =
+      GetCmdSpace<webnn::cmds::InjectDawnWireServer>();
+  if (c) {
+    c->Init(channel_id, route_id);
+  }
+}
+
 #endif  // GPU_COMMAND_BUFFER_CLIENT_WEBNN_CMD_HELPER_AUTOGEN_H_

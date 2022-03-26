@@ -37,6 +37,7 @@ class MLGraph : public WebnnObject<WNNGraph> {
   void Trace(Visitor* visitor) const override;
 
   // ml_graph.idl
+  void compute(const MLNamedInputs& inputs, const MLNamedOutputs& outputs);
   ScriptPromise computeAsync(ScriptState* script_state,
                              const MLNamedInputs& inputs,
                              const MLNamedOutputs& outputs,

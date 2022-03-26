@@ -34,6 +34,7 @@
 #include <cstdint>
 #include "base/callback_forward.h"
 #include "third_party/skia/include/core/SkImageInfo.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 
 class GrDirectContext;
 
@@ -103,6 +104,7 @@ class WebGraphicsContext3DProvider {
   virtual gpu::webnn::WebNNInterface* WebNNInterface() = 0;
   virtual bool IsContextLost() = 0;  // Has the GPU driver lost this context?
   virtual bool BindToCurrentThread() = 0;
+  virtual gpu::CommandBufferId GetCommandBufferID() = 0;
   virtual GrDirectContext* GetGrContext() = 0;
   virtual const gpu::Capabilities& GetCapabilities() const = 0;
   virtual const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const = 0;

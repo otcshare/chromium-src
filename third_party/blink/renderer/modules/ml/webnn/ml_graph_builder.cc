@@ -5,7 +5,6 @@
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph_builder.h"
 
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_batch_normalization_options.h"
-#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_buffer_resource_view.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_clamp_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_conv_2d_options.h"
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_gemm_options.h"
@@ -22,6 +21,7 @@
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_operand.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_operator.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_buffer.h"
 
 namespace blink {
 
@@ -171,16 +171,18 @@ WNNPool2dOptions AsWebnnType(const MLPool2dOptions* pool2d_options) {
   return webnn_pool2d_options;
 }
 
-WNNArrayBufferView AsWebnnType(const MLBufferResourceView* resource) {
-  NOTREACHED();
-  WNNArrayBufferView webnn_buffer;
-  //   webnn_buffer.buffer = resource->resource()->GetHandle();
-  //   webnn_buffer.byteLength = resource->getSizeOr(0);
-  //   webnn_buffer.byteOffset = resource->offset();
+WNNGpuBufferView AsWebnnType(const MLBufferResourceView* resource) {
+  WNNGpuBufferView webnn_buffer = {};
+  std::tuple<uint32_t, uint32_t> buffer = resource->resource()->GetBufferId();
+  webnn_buffer.id = std::get<0>(buffer);
+  webnn_buffer.generation = std::get<1>(buffer);
+  webnn_buffer.size = resource->getSizeOr(0);
+  webnn_buffer.offset = resource->offset();
   return webnn_buffer;
 }
 
-WNNArrayBufferView AsWebnnType(const MaybeShared<DOMArrayBufferView>& resource) {
+WNNArrayBufferView AsWebnnType(
+    const MaybeShared<DOMArrayBufferView>& resource) {
   WNNArrayBufferView webnn_buffer;
   webnn_buffer.buffer = resource->BaseAddressMaybeShared();
   webnn_buffer.byteLength = resource->byteLength();
@@ -188,32 +190,33 @@ WNNArrayBufferView AsWebnnType(const MaybeShared<DOMArrayBufferView>& resource) 
   return webnn_buffer;
 }
 
-WNNArrayBufferView AsWebnnType(const MLResource* buffer) {
-  DCHECK(buffer);
-  switch (buffer->GetContentType()) {
-    case MLResource::ContentType::kArrayBufferViewAllowShared:
-      return AsWebnnType(buffer->GetAsArrayBufferViewAllowShared());
-    case MLResource::ContentType::kMLBufferResourceView:
-      NOTREACHED();
-      return {};
-  }
-  NOTREACHED();
-  return {};
-}
-
 WNNInput AsWebnnType(const MLInputResource* buffer) {
   DCHECK(buffer);
   WNNInput webnn_input = {};
   switch (buffer->GetContentType()) {
     case MLInputResource::ContentType::kArrayBufferViewAllowShared:
-      webnn_input.resource = AsWebnnType(buffer->GetAsArrayBufferViewAllowShared());
+      webnn_input.resource.arrayBufferView =
+          AsWebnnType(buffer->GetAsArrayBufferViewAllowShared());
       break;
     case MLInputResource::ContentType::kMLBufferResourceView:
-      NOTREACHED();
+      webnn_input.resource.gpuBufferView =
+          AsWebnnType(buffer->GetAsMLBufferResourceView());
       break;
     case MLInputResource::ContentType::kMLInput: {
       MLInput* ml_input = buffer->GetAsMLInput();
-      webnn_input.resource = AsWebnnType(ml_input->resource());
+      MLResource* resource = ml_input->resource();
+      switch (resource->GetContentType()) {
+        case MLResource::ContentType::kArrayBufferViewAllowShared:
+          webnn_input.resource.arrayBufferView =
+              AsWebnnType(resource->GetAsArrayBufferViewAllowShared());
+          break;
+        case MLResource::ContentType::kMLBufferResourceView:
+          webnn_input.resource.gpuBufferView =
+              AsWebnnType(resource->GetAsMLBufferResourceView());
+          break;
+        default:
+          NOTREACHED();
+      }
       webnn_input.dimensions =
           ml_input->hasDimensions() ? ml_input->dimensions().data() : nullptr;
       webnn_input.dimensionsCount =
@@ -299,9 +302,25 @@ MLOperand* MLGraphBuilder::input(String name, const MLOperandDescriptor* desc) {
 MLOperand* MLGraphBuilder::constant(const MLOperandDescriptor* desc,
                                     const MLResource* buffer_view) {
   WNNOperandDescriptor webnn_desc = AsWebnnType(desc);
-  WNNArrayBufferView webnn_buffer_view = AsWebnnType(buffer_view);
-  WNNOperand webnn_constant = GetProcs().graphBuilderConstant(
-      GetHandle(), &webnn_desc, &webnn_buffer_view);
+  WNNOperand webnn_constant;
+  switch (buffer_view->GetContentType()) {
+    case MLResource::ContentType::kArrayBufferViewAllowShared: {
+      WNNArrayBufferView array_buffer_view =
+          AsWebnnType(buffer_view->GetAsArrayBufferViewAllowShared());
+      webnn_constant = GetProcs().graphBuilderConstant(GetHandle(), &webnn_desc,
+                                                       &array_buffer_view);
+      break;
+    }
+    case MLResource::ContentType::kMLBufferResourceView: {
+      WNNGpuBufferView gpu_buffer_view =
+          AsWebnnType(buffer_view->GetAsMLBufferResourceView());
+      webnn_constant = GetProcs().graphBuilderConstantWithGpuBuffer(
+          GetHandle(), &webnn_desc, &gpu_buffer_view);
+      break;
+    }
+    default:
+      NOTREACHED();
+  }
   MLOperand* constant =
       MakeGarbageCollected<MLOperand>(GetContext(), webnn_constant);
   return constant;
@@ -491,12 +510,12 @@ MLOperand* MLGraphBuilder::maxPool2d(const MLOperand* input,
 }
 
 MLOperand* MLGraphBuilder::pad(const MLOperand* input,
-                               const MLOperand* padding,
+                               const Vector<uint32_t>& padding,
                                const MLPadOptions* options) {
   WNNPadOptions webnn_pad_options = AsWebnnType(options);
-  WNNOperand webnn_output =
-      GetProcs().graphBuilderPad(GetHandle(), input->GetHandle(),
-                                 padding->GetHandle(), &webnn_pad_options);
+  WNNOperand webnn_output = GetProcs().graphBuilderPad(
+      GetHandle(), input->GetHandle(), padding.data(),
+      static_cast<uint32_t>(padding.size()), &webnn_pad_options);
   MLOperand* output =
       MakeGarbageCollected<MLOperand>(GetContext(), webnn_output);
   return output;

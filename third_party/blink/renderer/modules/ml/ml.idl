@@ -8,4 +8,5 @@
   Exposed(Window WebGPU, Worker WebGPU)
 ] interface ML {
     MLContext createContext(optional MLContextOptions options = {});
+    MLContext createContext(GPUDevice device);
 };

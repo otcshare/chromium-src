@@ -5,6 +5,7 @@
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph.h"
 
 #include "third_party/blink/renderer/bindings/modules/v8/v8_ml_buffer_resource_view.h"
+#include "third_party/blink/renderer/bindings/modules/v8/v8_union_arraybufferviewallowshared_mlbufferresourceview.h"
 #include "third_party/blink/renderer/core/dom/dom_exception.h"
 #include "third_party/blink/renderer/modules/ml/ml.h"
 #include "third_party/blink/renderer/modules/ml/ml_context.h"
@@ -16,6 +17,16 @@ MLGraph::MLGraph(MLContext* context, WNNGraph graph)
 
 void MLGraph::Trace(Visitor* visitor) const {
   WebnnObject<WNNGraph>::Trace(visitor);
+}
+
+void MLGraph::compute(const MLNamedInputs& inputs, const MLNamedOutputs& outputs) {
+  // TODO: 1, Release WNNNamedInputs and WNNNamedOutputs memory
+  // 2, Should MLNamedInputs or WNNNamedOutputs be created for every
+  // computation.
+  WNNNamedInputs webnn_inputs = CreateAndPopulateNamedInputs(inputs);
+  WNNNamedOutputs webnn_outputs = CreateAndPopulateNamedOutputs(outputs);
+  GetProcs().graphCompute(GetHandle(), webnn_inputs, webnn_outputs);
+  FlushNow();
 }
 
 ScriptPromise MLGraph::computeAsync(ScriptState* script_state,
@@ -84,9 +95,22 @@ WNNNamedOutputs MLGraph::CreateAndPopulateNamedOutputs(
   WNNNamedOutputs webnn_outputs =
       GetProcs().instanceCreateNamedOutputs(instance);
   for (wtf_size_t i = 0; i < outputs.size(); ++i) {
+    WNNResource webnn_resource = {};
+    MLResource* resource = outputs[i].second;
+    switch (resource->GetContentType()) {
+      case MLResource::ContentType::kArrayBufferViewAllowShared:
+        webnn_resource.arrayBufferView =
+            AsWebnnType(resource->GetAsArrayBufferViewAllowShared());
+        break;
+      case MLResource::ContentType::kMLBufferResourceView:
+        webnn_resource.gpuBufferView =
+            AsWebnnType(resource->GetAsMLBufferResourceView());
+        break;
+      default:
+        NOTREACHED();
+    }
     std::string name = outputs[i].first.Utf8();
-    WNNArrayBufferView webnn_output = AsWebnnType(outputs[i].second);
-    GetProcs().namedOutputsSet(webnn_outputs, name.c_str(), &webnn_output);
+    GetProcs().namedOutputsSet(webnn_outputs, name.c_str(), &webnn_resource);
   }
   return webnn_outputs;
 }

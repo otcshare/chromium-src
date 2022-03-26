@@ -27,6 +27,7 @@
 #include "gpu/command_buffer/service/webnn_decoder.h"
 #include "gpu/config/gpu_preferences.h"
 #include "ipc/ipc_channel.h"
+#include "ipc/common/command_buffer_id.h"
 
 namespace gpu {
 namespace webnn {
@@ -142,9 +143,7 @@ class WebNNDecoderImpl final : public WebNNDecoder {
     return nullptr;
   }
   void Destroy(bool have_context) override;
-  bool MakeCurrent() override {
-    return true;
-  }
+  bool MakeCurrent() override { return true; }
   gl::GLContext* GetGLContext() override { return nullptr; }
   gl::GLSurface* GetGLSurface() override {
     NOTREACHED();
@@ -348,6 +347,7 @@ class WebNNDecoderImpl final : public WebNNDecoder {
 
   std::unique_ptr<webnn_wire::WireServer> wire_server_;
   std::unique_ptr<WireServerCommandSerializer> wire_serializer_;
+  SharedImageManager* shared_image_manager_;
 
   bool destroyed_ = false;
 
@@ -385,7 +385,8 @@ WebNNDecoderImpl::WebNNDecoderImpl(
     const GpuPreferences& gpu_preferences)
     : WebNNDecoder(client, command_buffer_service),
       webnn_instance_(new webnn_native::Instance()),
-      wire_serializer_(new WireServerCommandSerializer(client)) {
+      wire_serializer_(new WireServerCommandSerializer(client)),
+      shared_image_manager_(shared_image_manager) {
   webnn_wire::WireServerDescriptor descriptor = {};
   descriptor.procs = &webnn_native::GetProcs();
   descriptor.serializer = wire_serializer_.get();
@@ -495,6 +496,25 @@ error::Error WebNNDecoderImpl::HandleInjectInstance(
 
   // Inject the instance in the webnn_wire::Server.
   if (!wire_server_->InjectInstance(webnn_instance_->Get(), id, generation)) {
+    DLOG(ERROR) << "Failed to inject instance.";
+    return error::kInvalidArguments;
+  }
+
+  return error::kNoError;
+}
+
+error::Error WebNNDecoderImpl::HandleInjectDawnWireServer(
+    uint32_t immediate_data_size,
+    const volatile void* cmd_data) {
+  const volatile webnn::cmds::InjectDawnWireServer& c =
+      *static_cast<const volatile webnn::cmds::InjectDawnWireServer*>(cmd_data);
+  uint32_t channel_id = static_cast<uint32_t>(c.channel_id);
+  uint32_t route_id = static_cast<uint32_t>(c.route_id);
+
+  dawn_wire::WireServer* dawn_wire_server =
+      shared_image_manager_->DawnWireServer(
+          CommandBufferIdFromChannelAndRoute(channel_id, route_id));
+  if (!wire_server_->InjectDawnWireServer(dawn_wire_server)) {
     DLOG(ERROR) << "Failed to inject instance.";
     return error::kInvalidArguments;
   }

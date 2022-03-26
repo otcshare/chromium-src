@@ -54,6 +54,11 @@ _FUNCTION_INFO = {
     'internal': True,
     'cmd_args': 'uint32_t instance_id, uint32_t instance_generation',
   },
+  'InjectDawnWireServer': {
+    'impl_func': False,
+    'internal': True,
+    'cmd_args': 'int channel_id, int32_t route_id',
+  },
   'DestroyServer': {
     'impl_func': False,
     'internal': True,

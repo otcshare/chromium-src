@@ -77,6 +77,9 @@ class WebGPUInterface : public InterfaceBase {
                               const WGPUSupportedLimits*,
                               const char*)> request_device_callback) = 0;
 
+  virtual std::tuple<uint32_t, uint32_t> GetDeviceId(WGPUDevice device) = 0;
+  virtual std::tuple<uint32_t, uint32_t> GetBufferId(WGPUBuffer buffer) = 0;
+
   // Gets or creates a usable WGPUDevice synchronously. It really should not
   // be used, and the async request adapter and request device APIs should be
   // used instead.

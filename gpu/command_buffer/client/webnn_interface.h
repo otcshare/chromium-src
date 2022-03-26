@@ -63,6 +63,7 @@ class WebNNInterface : public InterfaceBase {
 
   virtual ReservedInstance ReserveInstance() = 0;
   virtual void InjectInstance(uint32_t id, uint32_t generation) = 0;
+  virtual void InjectDawnWireServer(int channel_id, int32_t route_id) = 0;
 
 // Include the auto-generated part of this class. We split this because
 // it means we can easily edit the non-auto generated parts right here in

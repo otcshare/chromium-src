@@ -391,5 +391,18 @@ void WebNNImplementation::InjectInstance(uint32_t id, uint32_t generation) {
   helper_->Flush();
 }
 
+void WebNNImplementation::InjectDawnWireServer(int channel_id, int32_t route_id) {
+  if (lost_) {
+    return;
+  }
+
+  // Commit because we need to make sure messages that free a previously used
+  // instance are seen first. ReserveInstance may reuse an existing ID.
+  webnn_wire_->serializer()->Commit();
+
+  helper_->InjectDawnWireServer(channel_id, route_id);
+  helper_->Flush();
+}
+
 }  // namespace webnn
 }  // namespace gpu

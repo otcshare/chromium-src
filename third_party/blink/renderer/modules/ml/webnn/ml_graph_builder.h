@@ -5,6 +5,7 @@
 #ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_ML_WEBNN_ML_GRAPH_BUILDER_H_
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ML_WEBNN_ML_GRAPH_BUILDER_H_
 
+#include "third_party/blink/renderer/bindings/modules/v8/v8_ml_buffer_resource_view.h"
 #include "third_party/blink/renderer/core/typed_arrays/array_buffer_view_helpers.h"
 #include "third_party/blink/renderer/core/typed_arrays/dom_array_buffer_view.h"
 #include "third_party/blink/renderer/modules/ml/webnn/webnn_object.h"
@@ -29,12 +30,15 @@ class MLGraph;
 class V8UnionArrayBufferViewAllowSharedOrMLBufferResourceViewOrMLInput;
 class V8UnionArrayBufferViewAllowSharedOrMLBufferResourceView;
 
-typedef V8UnionArrayBufferViewAllowSharedOrMLBufferResourceViewOrMLInput MLInputResource;
+typedef V8UnionArrayBufferViewAllowSharedOrMLBufferResourceViewOrMLInput
+    MLInputResource;
 typedef V8UnionArrayBufferViewAllowSharedOrMLBufferResourceView MLResource;
 
 WNNInput AsWebnnType(const MLInputResource* input);
 WNNArrayBufferView AsWebnnType(const MLResource* resource);
+WNNArrayBufferView AsWebnnType(const MaybeShared<DOMArrayBufferView>& resource);
 WNNOperandDescriptor AsWebnnType(const MLOperandDescriptor* desc);
+WNNGpuBufferView AsWebnnType(const MLBufferResourceView* resource);
 
 typedef HeapVector<std::pair<String, Member<MLOperand>>> MLNamedOperands;
 
@@ -98,7 +102,7 @@ class MLGraphBuilder : public WebnnObject<WNNGraphBuilder> {
   MLOperand* maxPool2d(const MLOperand* input, const MLPool2dOptions* options);
 
   MLOperand* pad(const MLOperand* input,
-                 const MLOperand* padding,
+                 const Vector<uint32_t>& padding,
                  const MLPadOptions* options);
 
   MLOperand* relu(const MLOperand* input);

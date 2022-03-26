@@ -10,4 +10,5 @@ typedef record<DOMString, MLResource> MLNamedOutputs;
 interface MLGraph {
   [CallWith=ScriptState, RaisesException]
     Promise<void> computeAsync(MLNamedInputs inputs, MLNamedOutputs outputs);
+  void compute(MLNamedInputs inputs, MLNamedOutputs outputs);
 };

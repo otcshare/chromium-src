@@ -20,6 +20,7 @@ ML::ML(ExecutionContext* execution_context)
       execution_context_(execution_context),
       remote_service_(execution_context_.Get()) {
   webnn_instance_ = std::make_unique<WebnnInstance>();
+  webnn_instance_->Initialize(execution_context_);
 }
 
 void ML::Load(ScriptState* script_state,
@@ -54,8 +55,7 @@ MLContext* ML::createContext(MLContextOptions* option) {
 
   // ExecutionContext* execution_context = ExecutionContext::From(script_state);
   // WebNN implementation
-  WNNContext webnn_context =
-      webnn_instance_->CreateContext(execution_context_, option);
+  WNNContext webnn_context = webnn_instance_->CreateContext(option);
   if (!webnn_context) {
     // resolver->Resolve(v8::Null(script_state->GetIsolate()));
     return nullptr;
@@ -68,6 +68,25 @@ MLContext* ML::createContext(MLContextOptions* option) {
       execution_context_, webnn_instance_->GetWebnnControlClient(),
       webnn_context, option->modelFormat(), this);
   // resolver->Resolve(ml_context);
+
+  return ml_context;
+}
+
+MLContext* ML::createContext(GPUDevice* device) {
+  gpu::CommandBufferId command_buffer_id = device->GetCommandBufferID();
+  std::tuple<uint32_t, uint32_t> device_id = device->GetDeviceID();
+  WNNContext webnn_context = webnn_instance_->CreateContext(
+      std::get<0>(device_id), std::get<1>(device_id), command_buffer_id);
+  if (!webnn_context) {
+    return nullptr;
+  }
+
+  // Notice that currently, we just create the context in the renderer. In the
+  // future we may add backend query ability to check whether a context is
+  // supportable or not. At that time, this function will be truly asynced.
+  auto* ml_context = MakeGarbageCollected<MLContext>(
+      execution_context_, webnn_instance_->GetWebnnControlClient(),
+      webnn_context, "", this);
 
   return ml_context;
 }

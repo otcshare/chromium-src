@@ -30,6 +30,7 @@ class WebNNInterfaceStub : public WebNNInterface {
   void FlushAwaitingCommands() override;
   ReservedInstance ReserveInstance() override;
   void InjectInstance(uint32_t id, uint32_t generation) override;
+  void InjectDawnWireServer(int channel_id, int32_t route_id) override;
 
 // Include the auto-generated part of this class. We split this because
 // it means we can easily edit the non-auto generated parts right here in

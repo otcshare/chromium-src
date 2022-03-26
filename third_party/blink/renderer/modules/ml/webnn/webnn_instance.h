@@ -6,6 +6,7 @@
 #define THIRD_PARTY_BLINK_RENDERER_MODULES_ML_WEBNN_WEBNN_INSTANCE_H_
 
 #include "base/memory/scoped_refptr.h"
+#include "gpu/command_buffer/common/command_buffer_id.h"
 #include "third_party/blink/renderer/platform/graphics/gpu/webnn_control_client_holder.h"
 
 namespace blink {
@@ -21,8 +22,11 @@ class WebnnInstance final {
   WebnnInstance(const WebnnInstance&) = delete;
   WebnnInstance& operator=(const WebnnInstance&) = delete;
 
-  WNNContext CreateContext(ExecutionContext* execution_context,
-                           MLContextOptions* options);
+  void Initialize(ExecutionContext* execution_context);
+  WNNContext CreateContext(MLContextOptions* options);
+  WNNContext CreateContext(uint32_t device_id,
+                           uint32_t device_generation,
+                           gpu::CommandBufferId command_buffer_id);
   void ContextDestroyed();
 
   const scoped_refptr<WebnnControlClientHolder>& GetWebnnControlClient() const;

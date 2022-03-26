@@ -28,6 +28,7 @@
 #include "gpu/command_buffer/service/shared_image_manager.h"
 #include "gpu/command_buffer/service/shared_image_representation.h"
 #include "gpu/command_buffer/service/webgpu_decoder.h"
+#include "ipc/service/webgpu_command_buffer_stub.h"
 #include "gpu/config/gpu_preferences.h"
 #include "ipc/ipc_channel.h"
 #include "ui/gl/gl_context_egl.h"
@@ -553,6 +554,9 @@ WebGPUDecoderImpl::WebGPUDecoderImpl(
   descriptor.serializer = wire_serializer_.get();
   descriptor.memoryTransferService = memory_transfer_service_.get();
   wire_server_ = std::make_unique<dawn_wire::WireServer>(descriptor);
+  WebGPUCommandBufferStub* stub = static_cast<WebGPUCommandBufferStub*>(client);
+  CommandBufferId command_buffer_id = stub->command_buffer_id();
+  shared_image_manager->SetDawnWireServer(command_buffer_id, wire_server_.get());
 }
 
 WebGPUDecoderImpl::~WebGPUDecoderImpl() {
