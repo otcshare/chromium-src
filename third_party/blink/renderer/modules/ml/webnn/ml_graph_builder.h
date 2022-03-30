@@ -11,6 +11,7 @@
 #include "third_party/blink/renderer/modules/ml/webnn/webnn_object.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_buffer.h"
 
 namespace blink {
 
@@ -118,6 +119,9 @@ class MLGraphBuilder : public WebnnObject<WNNGraphBuilder> {
   MLOperand* softmax(const MLOperand* input);
 
   MLGraph* build(const MLNamedOperands& outputs);
+
+ private:
+  HeapVector<Member<GPUBuffer>> gpu_buffers_;
 };
 
 }  // namespace blink

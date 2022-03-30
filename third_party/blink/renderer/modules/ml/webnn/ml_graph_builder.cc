@@ -21,7 +21,6 @@
 #include "third_party/blink/renderer/modules/ml/webnn/ml_graph.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_operand.h"
 #include "third_party/blink/renderer/modules/ml/webnn/ml_operator.h"
-#include "third_party/blink/renderer/modules/webgpu/gpu_buffer.h"
 
 namespace blink {
 
@@ -284,6 +283,7 @@ MLGraphBuilder::MLGraphBuilder(MLContext* context, WNNGraphBuilder builder)
 
 void MLGraphBuilder::Trace(Visitor* visitor) const {
   WebnnObject<WNNGraphBuilder>::Trace(visitor);
+  visitor->Trace(gpu_buffers_);
 }
 
 MLContext* MLGraphBuilder::GetContext() const {
@@ -312,6 +312,8 @@ MLOperand* MLGraphBuilder::constant(const MLOperandDescriptor* desc,
       break;
     }
     case MLResource::ContentType::kMLBufferResourceView: {
+      // Reference the GPUBuffer.
+      gpu_buffers_.push_back(buffer_view->GetAsMLBufferResourceView()->resource());
       WNNGpuBufferView gpu_buffer_view =
           AsWebnnType(buffer_view->GetAsMLBufferResourceView());
       webnn_constant = GetProcs().graphBuilderConstantWithGpuBuffer(

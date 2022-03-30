@@ -12,6 +12,7 @@
 #include "third_party/blink/renderer/modules/ml/webnn/webnn_object.h"
 #include "third_party/blink/renderer/platform/heap/collection_support/heap_vector.h"
 #include "third_party/blink/renderer/platform/heap/member.h"
+#include "third_party/blink/renderer/modules/webgpu/gpu_buffer.h"
 
 namespace blink {
 
@@ -49,6 +50,7 @@ class MLGraph : public WebnnObject<WNNGraph> {
                               const char* message);
   WNNNamedInputs CreateAndPopulateNamedInputs(const MLNamedInputs& inputs);
   WNNNamedOutputs CreateAndPopulateNamedOutputs(const MLNamedOutputs& outputs);
+  HeapVector<Member<GPUBuffer>> gpu_buffers_;
 };
 
 }  // namespace blink

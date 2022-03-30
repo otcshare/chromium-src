@@ -17,6 +17,7 @@ MLGraph::MLGraph(MLContext* context, WNNGraph graph)
 
 void MLGraph::Trace(Visitor* visitor) const {
   WebnnObject<WNNGraph>::Trace(visitor);
+  visitor->Trace(gpu_buffers_);
 }
 
 void MLGraph::compute(const MLNamedInputs& inputs, const MLNamedOutputs& outputs) {
@@ -103,6 +104,8 @@ WNNNamedOutputs MLGraph::CreateAndPopulateNamedOutputs(
             AsWebnnType(resource->GetAsArrayBufferViewAllowShared());
         break;
       case MLResource::ContentType::kMLBufferResourceView:
+      // Reference the GPUBuffer.
+      gpu_buffers_.push_back(resource->GetAsMLBufferResourceView()->resource());
         webnn_resource.gpuBufferView =
             AsWebnnType(resource->GetAsMLBufferResourceView());
         break;
