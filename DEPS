@@ -369,11 +369,11 @@ vars = {
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
-  'dawn_revision': '8c02f48581a3fef47fb7f11f476552916bfdf7c2',
+  'dawn_revision': 'fc5b3ad916c3971903f644152e92b2e7f439b46a',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
-  'webnn_revision': '6f6a9c402d3ec61859428c0f4aacb0ba78964b4c',
+  'webnn_revision': '2acd85984040a90b87b12f384f42b96f0a9861e0',
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling feed
   # and whatever else without interference from each other.
