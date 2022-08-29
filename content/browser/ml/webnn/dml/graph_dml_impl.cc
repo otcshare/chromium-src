@@ -4,12 +4,12 @@
 
 #include "content/browser/ml/webnn/dml/graph_dml_impl.h"
 
-#include "base/memory/ptr_util.h"
-#include "mojo/public/cpp/bindings/self_owned_receiver.h"
-
 #include "base/logging.h"
+#include "base/memory/ptr_util.h"
+#include "content/browser/ml/webnn/dml/execution_context.h"
 #include "content/browser/ml/webnn/dml/graph_dml_impl.h"
 #include "content/browser/ml/webnn/fusion_operators.h"
+#include "mojo/public/cpp/bindings/self_owned_receiver.h"
 #include "utils_dml.h"
 
 namespace content::webnn {
@@ -550,41 +550,22 @@ MemoryInfo::~MemoryInfo() = default;
   mIntermediateNodesMap[mIntermediateNodes.size()] = dmlOperator;
 
 // static
-void GraphDMLImpl::Create(mojo::PendingReceiver<Graph> receiver) {
-  mojo::MakeSelfOwnedReceiver<Graph>(base::WrapUnique(new GraphDMLImpl()),
-                                     std::move(receiver));
+void GraphDMLImpl::Create(mojo::PendingReceiver<Graph> receiver,
+                          scoped_refptr<ExecutionContext> execution_context) {
+  mojo::MakeSelfOwnedReceiver<Graph>(
+      base::WrapUnique(new GraphDMLImpl(execution_context)),
+      std::move(receiver));
 }
 
 GraphDMLImpl::~GraphDMLImpl() = default;
 
-GraphDMLImpl::GraphDMLImpl()
+GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context)
     : fusion_operators_(std::make_unique<FusionOperators>()) {
-  DXGI_GPU_PREFERENCE gpuPreference =
-      DXGI_GPU_PREFERENCE::DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE;
-  // PowerPreference powerPreference =
-  //     GetContext()->GetContextOptions().powerPreference;
-  // switch (powerPreference) {
-  //     case PowerPreference::High_performance:
-  //         gpuPreference =
-  //         DXGI_GPU_PREFERENCE::DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE; break;
-  //     case PowerPreference::Low_power:
-  //         gpuPreference =
-  //         DXGI_GPU_PREFERENCE::DXGI_GPU_PREFERENCE_MINIMUM_POWER; break;
-  //     default:
-  //         gpuPreference =
-  //         DXGI_GPU_PREFERENCE::DXGI_GPU_PREFERENCE_UNSPECIFIED;
-  // }
-  // Set up Direct3D 12.
-  InitD3D12(mCommandList, mCommandQueue, mCommandAllocator, mD3D12Device,
-                   gpuPreference, true);
-
-  // Create the DirectML device.
-  DML_CREATE_DEVICE_FLAGS dmlCreateDeviceFlags = DML_CREATE_DEVICE_FLAG_NONE;
-#if defined(_DEBUG)
-  dmlCreateDeviceFlags = DML_CREATE_DEVICE_FLAG_DEBUG;
-#endif
-  WEBNN_CHECK(DMLCreateDevice(mD3D12Device.Get(), dmlCreateDeviceFlags,
-                              IID_PPV_ARGS(&mDevice)));
+  mCommandQueue = execution_context->GetCommandQueue();
+  mCommandAllocator = execution_context->GetCommandAllocator();
+  mCommandList = execution_context->GetCommandList();
+  WEBNN_CHECK(mCommandQueue->GetDevice(IID_PPV_ARGS(&mD3D12Device)));
+  mDevice = execution_context->GetDMLDevice();
 }
 
 void GraphDMLImpl::AddInput(const std::string& name,
@@ -1573,14 +1554,14 @@ void GraphDMLImpl::Build(
   uint64_t constantInputsResourceSize = 0;
   for (auto& input : mInputs) {
     if (input->isConstantInput) {
-      uint64_t offset = RoundUpToMultiple(
-          constantInputsResourceSize,
-          (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+      uint64_t offset =
+          RoundUpToMultiple(constantInputsResourceSize,
+                            (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
       constantInputsResourceSize = offset + input->byteLength;
     } else {
-      uint64_t offset = RoundUpToMultiple(
-          mCommonInputsResourceSize,
-          (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+      uint64_t offset =
+          RoundUpToMultiple(mCommonInputsResourceSize,
+                            (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
       mCommonInputsResourceSize = offset + input->byteLength;
     }
   }
@@ -1627,7 +1608,7 @@ void GraphDMLImpl::Build(
                                    compiledOperatorInitializer.Get(),
                                    mBindingTable.Get());
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
-                               mD3D12Device);
+                        mD3D12Device);
 
   if (mCommonInputsResourceSize) {
     mUploadResource = nullptr;
@@ -1778,7 +1759,7 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
                    mOutputsResourceSize, D3D12_RESOURCE_STATE_COPY_SOURCE,
                    false);
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
-                               mD3D12Device);
+                        mD3D12Device);
 
   D3D12_RANGE tensorBufferRange{0, mOutputsResourceSize};
   int8_t* readBackBuffer;

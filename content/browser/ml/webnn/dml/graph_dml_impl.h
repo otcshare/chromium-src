@@ -95,16 +95,19 @@ struct EdgeInfo final : public EdgeInfoBase {
   uint32_t outputNodeIndex = 0;
 };
 
+class ExecutionContext;
+
 class GraphDMLImpl : public ml::webnn::mojom::Graph {
  public:
   ~GraphDMLImpl() override;
-  static void Create(mojo::PendingReceiver<ml::webnn::mojom::Graph> receiver);
+  static void Create(mojo::PendingReceiver<ml::webnn::mojom::Graph> receiver,
+                     scoped_refptr<ExecutionContext> adapter);
 
   GraphDMLImpl(const GraphDMLImpl&) = delete;
   GraphDMLImpl& operator=(const GraphDMLImpl&) = delete;
 
  protected:
-  GraphDMLImpl();
+  GraphDMLImpl(scoped_refptr<ExecutionContext> adapter);
 
  private:
   // ml::webnn::mojom::Graph

@@ -55,58 +55,6 @@ HRESULT IsWarpAdapter(IDXGIAdapter1* pAdapter, bool* isWarpAdapter) {
   return S_OK;
 }
 
-void InitD3D12(ComPtr<ID3D12GraphicsCommandList>& commandList,
-               ComPtr<ID3D12CommandQueue>& commandQueue,
-               ComPtr<ID3D12CommandAllocator>& commandAllocator,
-               ComPtr<ID3D12Device>& D3D12Device,
-               DXGI_GPU_PREFERENCE gpuPreference,
-               bool useGpu) {
-#if defined(_DEBUG)
-  ComPtr<ID3D12Debug> debug;
-  if (SUCCEEDED(D3D12GetDebugInterface(IID_PPV_ARGS(&debug)))) {
-    debug->EnableDebugLayer();
-  }
-#endif
-  ComPtr<IDXGIAdapter1> dxgiAdapter;
-  if (useGpu) {
-    ComPtr<IDXGIFactory6> dxgiFactory;
-    WEBNN_CHECK(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
-    UINT i = 0;
-    while (dxgiFactory->EnumAdapterByGpuPreference(
-               i++, gpuPreference, IID_PPV_ARGS(&dxgiAdapter)) !=
-           DXGI_ERROR_NOT_FOUND) {
-      bool isWarpAdapter = false;
-      WEBNN_CHECK(IsWarpAdapter(dxgiAdapter.Get(), &isWarpAdapter));
-      if (!isWarpAdapter) {
-        break;
-      }
-    }
-  }
-  if (!useGpu ||
-      FAILED(D3D12CreateDevice(dxgiAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                               IID_PPV_ARGS(&D3D12Device)))) {
-    // If a computer's display driver is not functioning or is disabled, the
-    // computer's primary (NULL) adapter might also be called "Microsoft Basic
-    // Render Driver."
-    ComPtr<IDXGIFactory4> dxgiFactory;
-    WEBNN_CHECK(CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory)));
-    WEBNN_CHECK(dxgiFactory->EnumWarpAdapter(IID_PPV_ARGS(&dxgiAdapter)));
-    WEBNN_CHECK(D3D12CreateDevice(dxgiAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                                  IID_PPV_ARGS(&D3D12Device)));
-  }
-
-  D3D12_COMMAND_QUEUE_DESC commandQueueDesc{};
-  commandQueueDesc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  commandQueueDesc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-  WEBNN_CHECK(D3D12Device->CreateCommandQueue(&commandQueueDesc,
-                                              IID_PPV_ARGS(&commandQueue)));
-  WEBNN_CHECK(D3D12Device->CreateCommandAllocator(
-      D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&commandAllocator)));
-  WEBNN_CHECK(D3D12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                             commandAllocator.Get(), nullptr,
-                                             IID_PPV_ARGS(&commandList)));
-}
-
 void CloseExecuteResetWait(ComPtr<ID3D12GraphicsCommandList> commandList,
                            ComPtr<ID3D12CommandQueue> commandQueue,
                            ComPtr<ID3D12CommandAllocator> commandAllocator,

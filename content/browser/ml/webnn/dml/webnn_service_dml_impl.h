@@ -5,11 +5,20 @@
 #ifndef CONTENT_BROWSER_ML_WEBNN_WEBNN_SERVICE_DML_IMPL_H_
 #define CONTENT_BROWSER_ML_WEBNN_WEBNN_SERVICE_DML_IMPL_H_
 
+#include <map>
+
 #include "components/ml/mojom/webnn_service.mojom.h"
+#include "content/browser/ml/webnn/dml/adapter_dml.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "mojo/public/cpp/bindings/receiver.h"
 
 namespace content::webnn {
+
+namespace {
+
+using ml::model_loader::mojom::PowerPreference;
+
+}
 
 class WebnnServiceDMLImpl : public ml::webnn::mojom::WebnnService {
  public:
@@ -28,8 +37,11 @@ class WebnnServiceDMLImpl : public ml::webnn::mojom::WebnnService {
   void BindMojoServer(
       mojo::PendingReceiver<ml::webnn::mojom::MojoServer> receiver) override;
 
+  scoped_refptr<AdapterDML> RequestAdapter(PowerPreference power_preference);
+
  private:
   mojo::Receiver<ml::webnn::mojom::WebnnService> receiver_;
+  std::map<AdapterType, scoped_refptr<AdapterDML>> adapter_map_;
 };
 
 }  // namespace content::webnn

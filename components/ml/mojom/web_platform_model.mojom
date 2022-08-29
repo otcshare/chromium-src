@@ -42,6 +42,16 @@ enum DevicePreference {
   kGpu = 2,
 };
 
+[Stable, Extensible]
+enum PowerPreference {
+  // Let the user agent select the most suitable behavior.
+  [Default] kDefault = 0,
+  // Prioritizes execution speed over power consumption.
+  kHighPerformance = 1,
+  // Prioritizes power consumption over other considerations such as execution speed.
+  kLowPower = 2,
+};
+
 [Stable]
 struct CreateModelLoaderOptions {
   // #Threads used in model inference.
