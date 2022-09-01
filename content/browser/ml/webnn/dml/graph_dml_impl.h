@@ -18,9 +18,8 @@
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "components/ml/mojom/webnn_graph.mojom.h"
-
-#include "components/ml/mojom/webnn_graph.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
+#include "utils_dml.h"
 
 namespace content::webnn {
 
@@ -64,50 +63,19 @@ struct DmlTensorDesc {
   DML_BUFFER_TENSOR_DESC bufferDesc = {};
 };
 
-// Represent the information of the graph's edges.
-struct EdgeInfoBase {
-  virtual ~EdgeInfoBase() = default;
-  DML_TENSOR_DESC outputTensorDESC = {};
-  std::string name = "";
-  bool isInputEdge = false;
-};
-
-// Only represent the information of the input edges.
-struct InputEdgeInfo final : public EdgeInfoBase {
-  ~InputEdgeInfo() override = default;
-  // Indicate the index of the graph's input.
-  size_t inputIndex = 0;
-  void const* buffer = nullptr;
-  size_t byteLength = 0;
-  // Indicate if the input is from constant buffer which need to be
-  // uploaded in the stage of initialization.
-  bool isConstantInput = false;
-};
-
-// Represent the information of the intermediate edges and output edges.
-struct EdgeInfo final : public EdgeInfoBase {
-  ~EdgeInfo() override = default;
-  // Indicate the index of the intermediate node from which this edge was
-  // produced.
-  uint32_t nodeIndex = 0;
-  // Indicate the index of the intermediate node' output from which this edge
-  // was produced.
-  uint32_t outputNodeIndex = 0;
-};
-
 class ExecutionContext;
 
 class GraphDMLImpl : public ml::webnn::mojom::Graph {
  public:
   ~GraphDMLImpl() override;
   static void Create(mojo::PendingReceiver<ml::webnn::mojom::Graph> receiver,
-                     scoped_refptr<ExecutionContext> adapter);
+                     scoped_refptr<ExecutionContext> execution_context);
 
   GraphDMLImpl(const GraphDMLImpl&) = delete;
   GraphDMLImpl& operator=(const GraphDMLImpl&) = delete;
 
  protected:
-  GraphDMLImpl(scoped_refptr<ExecutionContext> adapter);
+  GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context);
 
  private:
   // ml::webnn::mojom::Graph
@@ -144,10 +112,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
 
   void AddEdgesToThisNode(
       std::vector<std::shared_ptr<EdgeInfoBase>> inputNodes);
-  void FillUploadResourceAndInputBindings(
-      uint64_t uploadResourceSize,
-      std::vector<DML_BUFFER_BINDING>& inputBufferBinding,
-      NamedInputsPtr namedInputs);
   std::shared_ptr<EdgeInfoBase> Clamp(std::shared_ptr<EdgeInfoBase> inputEdge,
                                       const ClampOptions* options);
   void EmulateFusedOperator(const FusionOperator* activation,
@@ -159,6 +123,7 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   BuildResult Finish();
   void AddOutput(const std::string&, uint32_t);
 
+  scoped_refptr<ExecutionContext> execution_context_;
   // Represents a DirectML device, which is used to create operators, binding
   // tables, command recorders, and other objects.
   ComPtr<IDMLDevice> mDevice;
@@ -173,20 +138,13 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   ComPtr<ID3D12CommandQueue> mCommandQueue;
   ComPtr<ID3D12CommandAllocator> mCommandAllocator;
   ComPtr<ID3D12GraphicsCommandList> mCommandList;
-  ComPtr<IDMLBindingTable> mBindingTable;
-  ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
 
-  ComPtr<ID3D12Resource> mUploadResource;
-  ComPtr<ID3D12Resource> mInputResource;
-  ComPtr<ID3D12Resource> mOutputResource;
-  ComPtr<ID3D12Resource> mReadBackResource;
-  ComPtr<ID3D12Resource> mTemporaryResource;
-  ComPtr<ID3D12Resource> mPersistentResource;
-
-  uint64_t mCommonInputsResourceSize = 0;
-  uint64_t mOutputsResourceSize = 0;
-  UINT64 mTemporaryResourceSize = 0;
-  UINT64 mPersistentResourceSize = 0;
+  UINT64 mOutputsResourceSize = 0;
+  UINT64 mCommonInputsResourceSize = 0;
+  ComPtr<ID3D12Resource> mUploadResource = nullptr;
+  ComPtr<ID3D12Resource> mInputResource = nullptr;
+  ComPtr<ID3D12Resource> mOutputResource = nullptr;
+  ComPtr<ID3D12Resource> mReadBackResource = nullptr;
 
   // Describe a graph of DirectML operators used to compile a combined,
   // optimized operator.
@@ -200,7 +158,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   // IDMLCompiledOperator represents the DirectML graph's output which need to
   // be initialized by IDMLOperatorInitializer.
   ComPtr<IDMLCompiledOperator> mCompiledOperator;
-  DML_BINDING_TABLE_DESC mBindingTableDesc;
 
   std::map<uint32_t, std::shared_ptr<EdgeInfoBase>> mGraphEdgesMap;
 

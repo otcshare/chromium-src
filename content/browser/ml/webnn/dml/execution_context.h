@@ -26,6 +26,19 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
 
   HRESULT Initialize();
 
+  HRESULT InitializeOperator(
+      IDMLCompiledOperator* compiled_operator,
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs);
+
+  HRESULT ExecuteOperator(
+      IDMLCompiledOperator* compiled_operator,
+      NamedInputsPtr namedInputs,
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+      const std::vector<DML_BINDING_DESC>& output_bindings,
+      UINT64 commonInputsResourceSize,
+      ComPtr<ID3D12Resource> uploadResource,
+      ComPtr<ID3D12Resource> inputResource);
+
   // TODO
   ComPtr<ID3D12CommandQueue> GetCommandQueue();
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();

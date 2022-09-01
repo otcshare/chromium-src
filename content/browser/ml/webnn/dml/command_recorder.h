@@ -6,12 +6,16 @@
 #define CONTENT_BROWSER_ML_WEBNN_DML_COMMAND_RECORDER_H_
 
 #include <wrl.h>
+#include <vector>
 
 #include "DirectML.h"
+#include "components/ml/mojom/webnn_graph.mojom.h"
+#include "content/browser/ml/webnn/dml/utils_dml.h"
 
 namespace content::webnn {
 
 using Microsoft::WRL::ComPtr;
+using ml::webnn::mojom::NamedInputsPtr;
 
 class CommandRecorder final {
  public:
@@ -23,26 +27,51 @@ class CommandRecorder final {
 
   HRESULT Initialize();
 
-  //   void InitializeOperator(IDMLCompiledOperator* op,
-  //                           const DML_BINDING_DESC&
-  //                           persistentResourceBinding, const
-  //                           DML_BINDING_DESC& inputArrayBinding);
+  HRESULT InitializeOperator(
+      IDMLCompiledOperator* compiled_operator,
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs);
 
-  //   void ExecuteOperator(IDMLCompiledOperator* op,
-  //                        const DML_BINDING_DESC& persistentResourceBinding,
-  //                        std::span<const DML_BINDING_DESC> inputBindings,
-  //                        std::span<const DML_BINDING_DESC> outputBindings);
+  HRESULT ExecuteOperator(
+      IDMLCompiledOperator* compiled_operator,
+      NamedInputsPtr namedInputs,
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+      const std::vector<DML_BINDING_DESC>& output_bindings,
+      UINT64 commonInputsResourceSize,
+      ComPtr<ID3D12Resource> uploadResource,
+      ComPtr<ID3D12Resource> inputResource);
 
   // TODO:
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
   ComPtr<ID3D12GraphicsCommandList> GetCommandList();
   ComPtr<IDMLDevice> GetDMLDevice();
+  void FillUploadResourceAndInputBindings(
+      UINT64 uploadResourceSize,
+      std::vector<DML_BUFFER_BINDING>& inputBufferBinding,
+      NamedInputsPtr namedInputs,
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+      ComPtr<ID3D12Resource> uploadResource,
+      ComPtr<ID3D12Resource> inputResource);
 
  private:
   ComPtr<IDMLDevice> dml_device_;
-  ComPtr<IDMLCommandRecorder> command_recorder_;
+  ComPtr<ID3D12Device> d3d12_device_;
   ComPtr<ID3D12CommandAllocator> command_allocator_;
   ComPtr<ID3D12GraphicsCommandList> command_list_;
+
+  ComPtr<IDMLOperatorInitializer> operator_initializer_;
+  ComPtr<IDMLCommandRecorder> command_recorder_;
+
+  ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
+  DML_BINDING_TABLE_DESC mBindingTableDesc;
+  ComPtr<IDMLBindingTable> mBindingTable;
+
+  ComPtr<ID3D12Resource> mUploadResource;
+  ComPtr<ID3D12Resource> mInputResource;
+  ComPtr<ID3D12Resource> mTemporaryResource;
+  ComPtr<ID3D12Resource> mPersistentResource;
+
+  UINT64 mTemporaryResourceSize = 0;
+  UINT64 mPersistentResourceSize = 0;
 };
 
 }  // namespace content::webnn

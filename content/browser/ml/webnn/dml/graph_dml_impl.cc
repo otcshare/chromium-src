@@ -91,39 +91,6 @@ DML_OPERATOR_DESC* CreateFusedOperator(
   return &dmlFusedOperatorDesc;
 }
 
-void CopyBufferRegion(ComPtr<ID3D12GraphicsCommandList> commandList,
-                      ComPtr<ID3D12Resource> srcResource,
-                      ComPtr<ID3D12Resource> destResource,
-                      UINT64 resourceSize,
-                      D3D12_RESOURCE_STATES state,
-                      bool needBarrierEnd = true) {
-  D3D12_RESOURCE_BARRIER resourceBarrier;
-  if (state == D3D12_RESOURCE_STATE_COPY_DEST) {
-    resourceBarrier.Transition.pResource = destResource.Get();
-  } else if (state == D3D12_RESOURCE_STATE_COPY_SOURCE) {
-    resourceBarrier.Transition.pResource = srcResource.Get();
-  } else {
-    LOG(ERROR) << "Unsupported D3D12_RESOURCE_STATES.";
-    assert(0);
-  }
-  resourceBarrier.Transition.StateBefore =
-      D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  resourceBarrier.Transition.StateAfter = state;
-  resourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  resourceBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-  resourceBarrier.Transition.Subresource =
-      D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  commandList->ResourceBarrier(1, &resourceBarrier);
-  commandList->CopyBufferRegion(destResource.Get(), 0, srcResource.Get(), 0,
-                                resourceSize);
-  if (needBarrierEnd) {
-    resourceBarrier.Transition.StateBefore = state;
-    resourceBarrier.Transition.StateAfter =
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    commandList->ResourceBarrier(1, &resourceBarrier);
-  }
-}
-
 // Strides are used to express broadcasting (by specifying a stride of 0) as
 // well as padding. If Strides is not specified, each dimension in the tensor is
 // considered to be contiguously packed, with no additional padding. The
@@ -324,27 +291,6 @@ std::vector<UINT> ExplicitPadding(const T* options) {
 
   return {paddingTop, paddingBottom, paddingLeft, paddingRight};
 }
-
-inline D3D12_HEAP_PROPERTIES CreateHeapProperties(
-    D3D12_HEAP_TYPE type = D3D12_HEAP_TYPE_DEFAULT) {
-  return {type, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1,
-          1};
-};
-
-inline D3D12_RESOURCE_DESC CreateResourceDesc(
-    UINT64 width,
-    D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE) {
-  return {D3D12_RESOURCE_DIMENSION_BUFFER,
-          0,
-          width,
-          1,
-          1,
-          1,
-          DXGI_FORMAT_UNKNOWN,
-          {1, 0},
-          D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-          flags};
-};
 
 bool CreateDmlTensorDesc(
     std::vector<std::shared_ptr<DmlTensorDesc>>& dmlTensorsDesc,
@@ -560,7 +506,8 @@ void GraphDMLImpl::Create(mojo::PendingReceiver<Graph> receiver,
 GraphDMLImpl::~GraphDMLImpl() = default;
 
 GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context)
-    : fusion_operators_(std::make_unique<FusionOperators>()) {
+    : execution_context_(execution_context),
+      fusion_operators_(std::make_unique<FusionOperators>()) {
   mCommandQueue = execution_context->GetCommandQueue();
   mCommandAllocator = execution_context->GetCommandAllocator();
   mCommandList = execution_context->GetCommandList();
@@ -1388,52 +1335,6 @@ void GraphDMLImpl::AddOutput(const std::string& name, uint32_t operand_id) {
   return;
 }
 
-void GraphDMLImpl::FillUploadResourceAndInputBindings(
-    uint64_t uploadResourceSize,
-    std::vector<DML_BUFFER_BINDING>& inputBufferBinding,
-    NamedInputsPtr namedInputs) {
-  D3D12_RANGE uploadBufferRange{0, uploadResourceSize};
-  int8_t* uploadBuffer;
-  WEBNN_CHECK(mUploadResource->Map(0, &uploadBufferRange,
-                                   reinterpret_cast<void**>(&uploadBuffer)));
-  uint64_t offset = 0;
-  for (size_t i = 0; i < mInputs.size(); ++i) {
-    auto input = mInputs[i];
-    if (namedInputs.get() == nullptr) {
-      if (input->isConstantInput) {
-        offset = RoundUpToMultiple(
-            offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-        inputBufferBinding[i].Buffer = mInputResource.Get();
-        inputBufferBinding[i].Offset = offset;
-        inputBufferBinding[i].SizeInBytes = input->byteLength;
-        memcpy(uploadBuffer + offset, input->buffer,
-               static_cast<size_t>(input->byteLength));
-        offset = offset + input->byteLength;
-      }
-    } else {
-      if (!input->isConstantInput) {
-        offset = RoundUpToMultiple(
-            offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-        MemoryInfoPtr memory_info = std::move(namedInputs->inputs[input->name]);
-        base::ReadOnlySharedMemoryRegion& shared_memory_region =
-            namedInputs->shared_memory;
-        DCHECK(shared_memory_region.IsValid());
-        base::ReadOnlySharedMemoryMapping shared_memory_mapping =
-            shared_memory_region.MapAt(memory_info->byte_offset,
-                                       memory_info->byte_length);
-        inputBufferBinding[i].Buffer = mInputResource.Get();
-        inputBufferBinding[i].Offset = offset;
-        inputBufferBinding[i].SizeInBytes = memory_info->byte_length;
-        memcpy(uploadBuffer + offset,
-               shared_memory_mapping.GetMemoryAs<uint8_t>(),
-               memory_info->byte_length);
-        offset = offset + memory_info->byte_length;
-      }
-    }
-  }
-  mUploadResource->Unmap(0, nullptr);
-}
-
 BuildResult GraphDMLImpl::Finish() {
   WEBNN_CHECK(mDevice.Get()->QueryInterface(IID_PPV_ARGS(&mDevice1)));
 
@@ -1468,151 +1369,20 @@ void GraphDMLImpl::Build(
   // Finish the graph build.
   Finish();
 
-  IDMLCompiledOperator* compiledOperators[] = {mCompiledOperator.Get()};
-  ComPtr<IDMLOperatorInitializer> compiledOperatorInitializer;
-  WEBNN_CHECK(mDevice->CreateOperatorInitializer(
-      ARRAYSIZE(compiledOperators), compiledOperators,
-      IID_PPV_ARGS(&compiledOperatorInitializer)));
+  execution_context_->InitializeOperator(mCompiledOperator.Get(), mInputs);
 
-  DML_BINDING_PROPERTIES initializeBindingProperties =
-      compiledOperatorInitializer->GetBindingProperties();
-  DML_BINDING_PROPERTIES executeBindingProperties =
-      mCompiledOperator->GetBindingProperties();
-  UINT descriptorCount =
-      std::max(initializeBindingProperties.RequiredDescriptorCount,
-               executeBindingProperties.RequiredDescriptorCount);
+  CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
+                        mD3D12Device);
 
-  // Describe and create a constant buffer view (CBV), Shader resource view
-  // (SRV), and unordered access view (UAV) descriptor heap.
-  D3D12_DESCRIPTOR_HEAP_DESC descriptorHeapDesc{};
-  descriptorHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-  descriptorHeapDesc.NumDescriptors = descriptorCount;
-  descriptorHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-  WEBNN_CHECK(mD3D12Device->CreateDescriptorHeap(
-      &descriptorHeapDesc, IID_PPV_ARGS(&mDescriptorHeap)));
-
-  // Set the descriptor heap(s).
-  ID3D12DescriptorHeap* descriptorHeaps[] = {mDescriptorHeap.Get()};
-  mCommandList->SetDescriptorHeaps(ARRAYSIZE(descriptorHeaps), descriptorHeaps);
-
-  // Create a binding table over the descriptor heap we just created.
-  mBindingTableDesc.Dispatchable = compiledOperatorInitializer.Get();
-  mBindingTableDesc.CPUDescriptorHandle =
-      mDescriptorHeap->GetCPUDescriptorHandleForHeapStart();
-  mBindingTableDesc.GPUDescriptorHandle =
-      mDescriptorHeap->GetGPUDescriptorHandleForHeapStart();
-  // The size of the binding table, in descriptors. This is the maximum number
-  // of descriptors that DirectML is permitted to write, from the start of both
-  // the supplied CPU and GPU descriptor handles.
-  mBindingTableDesc.SizeInDescriptors = descriptorCount;
-
-  WEBNN_CHECK(mDevice->CreateBindingTable(&mBindingTableDesc,
-                                          IID_PPV_ARGS(&mBindingTable)));
-
-  mTemporaryResourceSize =
-      std::max(initializeBindingProperties.TemporaryResourceSize,
-               executeBindingProperties.TemporaryResourceSize);
-  mPersistentResourceSize = executeBindingProperties.PersistentResourceSize;
-
-  // Bind and initialize the operator on the GPU.
-  if (mTemporaryResourceSize != 0) {
-    D3D12_HEAP_PROPERTIES heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC resource_desc = CreateResourceDesc(
-        mTemporaryResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    mD3D12Device->CreateCommittedResource(
-        &heap_properties, D3D12_HEAP_FLAG_NONE, &resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mTemporaryResource));
-
-    if (initializeBindingProperties.TemporaryResourceSize != 0) {
-      DML_BUFFER_BINDING bufferBinding{mTemporaryResource.Get(), 0,
-                                       mTemporaryResourceSize};
-      DML_BINDING_DESC bindingDesc{DML_BINDING_TYPE_BUFFER, &bufferBinding};
-      mBindingTable->BindTemporaryResource(&bindingDesc);
-    }
-  }
-
-  // Persistent resources must be supplied during initialization of a compiled
-  // operator (where it is bound as an output of the operator initializer) as
-  // well as during execution.
-  if (mPersistentResourceSize != 0) {
-    D3D12_HEAP_PROPERTIES heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC resource_desc = CreateResourceDesc(
-        mPersistentResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    mD3D12Device->CreateCommittedResource(
-        &heap_properties, D3D12_HEAP_FLAG_NONE, &resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mPersistentResource));
-
-    DML_BUFFER_BINDING bufferBinding{mPersistentResource.Get(), 0,
-                                     mPersistentResourceSize};
-    DML_BINDING_DESC bindingDesc{DML_BINDING_TYPE_BUFFER, &bufferBinding};
-    mBindingTable->BindOutputs(1, &bindingDesc);
-  }
-
-  // Initialize constant inputs.
-  uint64_t constantInputsResourceSize = 0;
   for (auto& input : mInputs) {
-    if (input->isConstantInput) {
-      uint64_t offset =
-          RoundUpToMultiple(constantInputsResourceSize,
-                            (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-      constantInputsResourceSize = offset + input->byteLength;
-    } else {
+    if (!input->isConstantInput) {
       uint64_t offset =
           RoundUpToMultiple(mCommonInputsResourceSize,
                             (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
       mCommonInputsResourceSize = offset + input->byteLength;
     }
   }
-
-  if (constantInputsResourceSize) {
-    D3D12_HEAP_PROPERTIES upload_heap_properties =
-        CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    D3D12_RESOURCE_DESC upload_resource_desc =
-        CreateResourceDesc(constantInputsResourceSize);
-    WEBNN_CHECK(mD3D12Device->CreateCommittedResource(
-        &upload_heap_properties, D3D12_HEAP_FLAG_NONE, &upload_resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&mUploadResource)));
-
-    D3D12_HEAP_PROPERTIES input_heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC input_resource_desc = CreateResourceDesc(
-        constantInputsResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    WEBNN_CHECK(mD3D12Device->CreateCommittedResource(
-        &input_heap_properties, D3D12_HEAP_FLAG_NONE, &input_resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mInputResource)));
-
-    std::vector<DML_BUFFER_BINDING> inputBufferBinding(mInputs.size());
-    FillUploadResourceAndInputBindings(constantInputsResourceSize,
-                                       inputBufferBinding, {});
-    // Copy buffer from mUploadResource to mInputResource.
-    CopyBufferRegion(mCommandList, mUploadResource, mInputResource,
-                     constantInputsResourceSize,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
-
-    DML_BUFFER_ARRAY_BINDING inputBufferArrayBinding = {};
-    inputBufferArrayBinding.BindingCount = inputBufferBinding.size();
-    inputBufferArrayBinding.Bindings = inputBufferBinding.data();
-    DML_BINDING_DESC inputBindingDesc{DML_BINDING_TYPE_BUFFER_ARRAY,
-                                      &inputBufferArrayBinding};
-    mBindingTable->BindInputs(1, &inputBindingDesc);
-  }
-
-  // Record execution of the operator initializer.
-  // The command recorder is a stateless object that records Dispatches into an
-  // existing Direct3D 12 command list.
-  WEBNN_CHECK(mDevice->CreateCommandRecorder(IID_PPV_ARGS(&mCommandRecorder)));
-  mCommandRecorder->RecordDispatch(mCommandList.Get(),
-                                   compiledOperatorInitializer.Get(),
-                                   mBindingTable.Get());
-  CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
-                        mD3D12Device);
-
   if (mCommonInputsResourceSize) {
-    mUploadResource = nullptr;
-    mInputResource = nullptr;
     D3D12_HEAP_PROPERTIES upload_heap_properties =
         CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
     D3D12_RESOURCE_DESC upload_resource_desc =
@@ -1676,52 +1446,6 @@ void GraphDMLImpl::Build(
 void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
                            ComputeCallback callback) {
   auto named_outputs = ml::webnn::mojom::NamedOutputs::New();
-  // Bind and execute the operator on the GPU.
-  // Reset the binding table to bind for the operator we want to execute (it
-  // was previously used to bind for the initializer).
-  mBindingTableDesc.Dispatchable = mCompiledOperator.Get();
-  mBindingTable->Reset(&mBindingTableDesc);
-
-  if (mTemporaryResourceSize != 0) {
-    DML_BUFFER_BINDING bufferBinding{mTemporaryResource.Get(), 0,
-                                     mTemporaryResourceSize};
-    DML_BINDING_DESC bindingDesc{DML_BINDING_TYPE_BUFFER, &bufferBinding};
-    mBindingTable->BindTemporaryResource(&bindingDesc);
-  }
-
-  if (mPersistentResourceSize != 0) {
-    DML_BUFFER_BINDING bufferBinding{mPersistentResource.Get(), 0,
-                                     mPersistentResourceSize};
-    DML_BINDING_DESC bindingDesc{DML_BINDING_TYPE_BUFFER, &bufferBinding};
-    mBindingTable->BindPersistentResource(&bindingDesc);
-  }
-
-  // for (auto& input : mInputs) {
-  //   // All the inputs must be set.
-  //   if (!input->isConstantInput &&
-  //       named_inputs->inputs.find(input->name) == named_inputs->inputs.end())
-  //       {
-  //     return ComputeResult::kIncorrectNumberOfInputs;
-  //   }
-  // }
-
-  // Initialize common inputs.
-  if (mCommonInputsResourceSize) {
-    std::vector<DML_BUFFER_BINDING> inputBufferBinding(mInputs.size());
-    FillUploadResourceAndInputBindings(
-        mCommonInputsResourceSize, inputBufferBinding, std::move(named_inputs));
-    // Copy buffer from mUploadResource to mInputResource.
-    CopyBufferRegion(mCommandList, mUploadResource, mInputResource,
-                     mCommonInputsResourceSize, D3D12_RESOURCE_STATE_COPY_DEST);
-
-    std::vector<DML_BINDING_DESC> inputBindingDesc(mInputs.size());
-    for (size_t i = 0; i < inputBufferBinding.size(); ++i) {
-      if (inputBufferBinding[i].Buffer != nullptr) {
-        inputBindingDesc[i] = {DML_BINDING_TYPE_BUFFER, &inputBufferBinding[i]};
-      }
-    }
-    mBindingTable->BindInputs(inputBindingDesc.size(), inputBindingDesc.data());
-  }
 
   std::vector<DML_BINDING_DESC> outputBindingDesc(mOutputs.size());
   // The sort of the outputs from Graph Compute is different from the
@@ -1745,19 +1469,17 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
                             &output_buffer_binding[name]};
     outputOffset = outputOffset + byteLength;
   }
-  mBindingTable->BindOutputs(outputBindingDesc.size(),
-                             outputBindingDesc.data());
 
-  // Record execution of the compiled operator.
-  ID3D12DescriptorHeap* descriptorHeaps[] = {mDescriptorHeap.Get()};
-  mCommandList->SetDescriptorHeaps(ARRAYSIZE(descriptorHeaps), descriptorHeaps);
-  mCommandRecorder->RecordDispatch(mCommandList.Get(), mCompiledOperator.Get(),
-                                   mBindingTable.Get());
+  execution_context_->ExecuteOperator(
+      mCompiledOperator.Get(), std::move(named_inputs), mInputs,
+      outputBindingDesc, mCommonInputsResourceSize, mUploadResource,
+      mInputResource);
 
   // Copy buffer from outputResource to readBackResource.
   CopyBufferRegion(mCommandList, mOutputResource, mReadBackResource,
                    mOutputsResourceSize, D3D12_RESOURCE_STATE_COPY_SOURCE,
                    false);
+
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
                         mD3D12Device);
 

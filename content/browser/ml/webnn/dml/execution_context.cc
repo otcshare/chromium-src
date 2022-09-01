@@ -22,6 +22,25 @@ HRESULT ExecutionContext::Initialize() {
   return S_OK;
 }
 
+HRESULT ExecutionContext::InitializeOperator(
+    IDMLCompiledOperator* compiled_operator,
+    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs) {
+  return command_recorder_.InitializeOperator(compiled_operator, inputs);
+}
+
+HRESULT ExecutionContext::ExecuteOperator(
+    IDMLCompiledOperator* compiled_operator,
+    NamedInputsPtr namedInputs,
+    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+    const std::vector<DML_BINDING_DESC>& output_bindings,
+    UINT64 commonInputsResourceSize,
+    ComPtr<ID3D12Resource> uploadResource,
+    ComPtr<ID3D12Resource> inputResource) {
+  return command_recorder_.ExecuteOperator(
+      compiled_operator, std::move(namedInputs), inputs, output_bindings,
+      commonInputsResourceSize, uploadResource, inputResource);
+}
+
 ComPtr<ID3D12CommandQueue> ExecutionContext::GetCommandQueue() {
   return command_queue_;
 }
