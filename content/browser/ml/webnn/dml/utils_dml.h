@@ -145,7 +145,7 @@ struct InputEdgeInfo final : public EdgeInfoBase {
   // Indicate the index of the graph's input.
   size_t inputIndex = 0;
   size_t byteLength = 0;
-  ComPtr<ID3D12Resource> resource;
+  uint32_t object_id;
   // Indicate if the input is from constant buffer which need to be
   // uploaded in the stage of initialization.
   bool isConstantInput = false;

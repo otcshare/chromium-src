@@ -18,6 +18,7 @@ namespace content::webnn {
 namespace {
 
 using ml::webnn::mojom::AutoPad;
+using ml::webnn::mojom::ConstantsInfoPtr;
 using ml::webnn::mojom::Conv2dFilterOperandLayout;
 using ml::webnn::mojom::Conv2dOptions;
 using ml::webnn::mojom::Conv2dOptionsPtr;
@@ -535,6 +536,7 @@ void GraphDMLImpl::AddInput(const std::string& name,
   inputEdgeInfo->isInputEdge = true;
   inputEdgeInfo->inputIndex = mInputs.size();
   inputEdgeInfo->byteLength = dmlTensorDesc->bufferDesc.TotalTensorSizeInBytes;
+  inputEdgeInfo->object_id = desc->object_id;
   std::shared_ptr<EdgeInfoBase> edge(inputEdgeInfo);
 
   mGraphEdgesMap[desc->object_id] = edge;
@@ -542,8 +544,7 @@ void GraphDMLImpl::AddInput(const std::string& name,
   return;
 }
 
-void GraphDMLImpl::AddConstant(OperandDescriptorPtr desc,
-                               const std::vector<uint8_t>& array_buffer) {
+void GraphDMLImpl::AddConstant(OperandDescriptorPtr desc) {
   // TODO: return directly if BuildResult has error message.
   if (mGraphEdgesMap.find(desc->object_id) != mGraphEdgesMap.end()) {
     LOG(ERROR) << "=======There are issues in sorting graph";
@@ -562,30 +563,11 @@ void GraphDMLImpl::AddConstant(OperandDescriptorPtr desc,
   inputEdgeInfo->name = "Input_Constant_" + std::to_string(mInputs.size());
   inputEdgeInfo->isInputEdge = true;
   inputEdgeInfo->inputIndex = mInputs.size();
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-  // Allocate gpu resource with ResourceAllocator and manage it with Residency
-  // management
-#else
-  // Use Committed resource directly that is managed by default.
-  size_t byte_length = array_buffer.size();
-  D3D12_RESOURCE_DESC resource_desc = CreateResourceDesc(
-      byte_length, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-  ComPtr<ID3D12Resource> resource = CreateCommittedResource(
-      execution_context_->GetD3D12Device().Get(), D3D12_HEAP_TYPE_DEFAULT,
-      resource_desc, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-  if (resource == nullptr) {
-    return;
-  }
-#endif
-  // Upload the data to GPU so that the constant data are not saved as member
-  // variable.
-  UploadHeap* uploader = execution_context_->GetUploadHeap();
-  uploader->UploadResourceWithRingBuffer(resource.Get(), 0,
-                                         array_buffer.data(), byte_length);
   // Keep the resource until initializing operators
   // constants_resource_.push_back(resource);
-  inputEdgeInfo->resource = std::move(resource);
+  // inputEdgeInfo->resource = std::move(resource);
   inputEdgeInfo->isConstantInput = true;
+  inputEdgeInfo->object_id = desc->object_id;
   std::shared_ptr<EdgeInfoBase> edge(inputEdgeInfo);
 
   mGraphEdgesMap[desc->object_id] = edge;
@@ -1379,6 +1361,7 @@ BuildResult GraphDMLImpl::Finish() {
 
 void GraphDMLImpl::Build(
     const base::flat_map<std::string, uint32_t>& named_operands,
+    ConstantsInfoPtr constants_info,
     BuildCallback callback) {
   // Add Output with named operands.
   for (auto& [name, operand_id] : named_operands) {
@@ -1388,13 +1371,19 @@ void GraphDMLImpl::Build(
   // Finish the graph build.
   Finish();
 
+  // Upload the data to GPU so that the constant data are not saved as member
+  // variable.
+  UploadHeap* uploader = execution_context_->GetUploadHeap();
+  ID3D12Resource* constants_resource =
+      uploader->UploadResourceWithRingBuffer(constants_info);
   std::vector<DML_BUFFER_BINDING> constant_buffer_binding(mInputs.size());
   for (size_t i = 0; i < mInputs.size(); ++i) {
     auto input = mInputs[i];
     if (input->isConstantInput) {
-      constant_buffer_binding[i].Buffer = input->resource.Get();
-      constant_buffer_binding[i].Offset = 0;
-      constant_buffer_binding[i].SizeInBytes = input->resource->GetDesc().Width;
+      constant_buffer_binding[i].Buffer = constants_resource;
+      auto& memory_info = constants_info->constants[input->object_id];
+      constant_buffer_binding[i].Offset = memory_info->byte_offset;
+      constant_buffer_binding[i].SizeInBytes = memory_info->byte_length;
     }
   }
 
@@ -1512,8 +1501,9 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
       mInputResource);
 
   // Copy buffer from outputResource to readBackResource.
-  CopyBufferRegionUtil(mCommandList, mOutputResource, mReadBackResource, mOutputsResourceSize,
-                   D3D12_RESOURCE_STATE_COPY_SOURCE, false);
+  CopyBufferRegionUtil(mCommandList, mOutputResource, mReadBackResource,
+                       mOutputsResourceSize, D3D12_RESOURCE_STATE_COPY_SOURCE,
+                       false);
 
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
                         mD3D12Device);

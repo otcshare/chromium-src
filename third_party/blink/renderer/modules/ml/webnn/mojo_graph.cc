@@ -414,7 +414,7 @@ void MojoGraph::OnGraphCreated(
       std::move(pending_remote),
       execution_context->GetTaskRunner(TaskType::kInternalDefault));
 
-  base::CheckedNumeric<size_t> shared_buffer_length(0);
+  base::CheckedNumeric<size_t> inputs_buffer_length(0);
   for (const auto& input : request->inputs_) {
     size_t input_byte_length = 0;
     if (!input->CalculateByteLength(input_byte_length)) {
@@ -432,11 +432,23 @@ void MojoGraph::OnGraphCreated(
 
     inputs_byte_length_.insert(input->Name(), input_byte_length);
     inputs_byte_offset_.insert(input->Name(),
-                               shared_buffer_length.ValueOrDie());
-    shared_buffer_length += input_byte_length;
+                               inputs_buffer_length.ValueOrDie());
+    inputs_buffer_length += input_byte_length;
   }
   inputs_shm_region_ = base::ReadOnlySharedMemoryRegion::Create(
-      shared_buffer_length.ValueOrDie());
+      inputs_buffer_length.ValueOrDie());
+
+  base::CheckedNumeric<size_t> constants_buffer_length(0);
+  for (const auto& constant : request->constants_) {
+    wtf_size_t size = base::checked_cast<wtf_size_t>(
+        constant->ArrayBufferView()->byteLength());
+    constants_buffer_length += size;
+  }
+  base::MappedReadOnlyRegion constants_shm_region =
+      base::ReadOnlySharedMemoryRegion::Create(
+          constants_buffer_length.ValueOrDie());
+  auto constants_info = ml::webnn::mojom::blink::ConstantsInfo::New();
+  base::CheckedNumeric<size_t> constant_offset(0);
   for (const auto& constant : request->constants_) {
     auto desc = ml::webnn::mojom::blink::OperandDescriptor::New();
     desc->data_type = BlinkOperandTypeToMojo(constant->Type());
@@ -444,12 +456,23 @@ void MojoGraph::OnGraphCreated(
     desc->object_id = constant->GetObjectId();
 
     auto* array_buffer_view = constant->ArrayBufferView();
-    wtf_size_t size =
-        base::checked_cast<wtf_size_t>(array_buffer_view->byteLength());
-    Vector<uint8_t> buffer(size);
-    memcpy(buffer.data(), array_buffer_view->BaseAddressMaybeShared(), size);
-    remote_graph_->AddConstant(std::move(desc), std::move(buffer));
+    size_t size = array_buffer_view->byteLength();
+    remote_graph_->AddConstant(std::move(desc));
+
+    auto memory_info = ml::webnn::mojom::blink::MemoryInfo::New();
+    memory_info->byte_offset = constant_offset.ValueOrDie();
+    memory_info->byte_length = size;
+    constant_offset += size;
+
+    uint8_t* address = constants_shm_region.mapping.GetMemoryAs<uint8_t>() +
+                       memory_info->byte_offset;
+    memcpy(address, array_buffer_view->BaseAddressMaybeShared(),
+           base::checked_cast<size_t>(memory_info->byte_length));
+    constants_info->constants.insert(constant->GetObjectId(),
+                                     std::move(memory_info));
   }
+  constants_info->shared_memory = constants_shm_region.region.Duplicate();
+
   for (const auto& op : request->sorted_operators_) {
     auto* output = op->Outputs()[0].Get();
     auto output_desc = ml::webnn::mojom::blink::OperandDescriptor::New();
@@ -479,7 +502,7 @@ void MojoGraph::OnGraphCreated(
     named_operands.insert(name, output->GetObjectId());
     // remote_graph_->AddOutput(name, output->GetObjectId());
   }
-  remote_graph_->Build(std::move(named_operands),
+  remote_graph_->Build(std::move(named_operands), std::move(constants_info),
                        WTF::Bind(&MojoGraph::OnGraphBuilt, WrapPersistent(this),
                                  WrapPersistent(resolver)));
   return;

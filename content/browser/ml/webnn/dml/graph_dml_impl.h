@@ -35,6 +35,7 @@ using ml::webnn::mojom::Conv2dOptionsPtr;
 using ml::webnn::mojom::FusionOperator;
 using ml::webnn::mojom::GemmOptionsPtr;
 using ml::webnn::mojom::NamedInputsPtr;
+using ml::webnn::mojom::ConstantsInfoPtr;
 using ml::webnn::mojom::NamedOutputsPtr;
 using ml::webnn::mojom::OperandDescriptorPtr;
 using ml::webnn::mojom::Pool2dOptions;
@@ -80,7 +81,7 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
  private:
   // ml::webnn::mojom::Graph
   void AddInput(const std::string&, OperandDescriptorPtr) override;
-  void AddConstant(OperandDescriptorPtr, const std::vector<uint8_t>&) override;
+  void AddConstant(OperandDescriptorPtr) override;
   void AddElementWiseBinary(uint32_t,
                             uint32_t,
                             BinaryOperandType,
@@ -107,6 +108,7 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   void AddFusionClamp(ClampOptionsPtr options, uint32_t operator_id) override;
 
   void Build(const base::flat_map<std::string, uint32_t>& named_operands,
+            ConstantsInfoPtr constants_info,
              BuildCallback callback) override;
   void Compute(NamedInputsPtr named_inputs, ComputeCallback callback) override;
 

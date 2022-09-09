@@ -9,10 +9,12 @@
 #include <vector>
 
 #include "DirectML.h"
+#include "components/ml/mojom/webnn_graph.mojom.h"
 
 namespace content::webnn {
 
 using Microsoft::WRL::ComPtr;
+using ml::webnn::mojom::ConstantsInfoPtr;
 class ExecutionContext;
 
 // A ring-buffer style upload heap for copying CPU data to GPU resources.
@@ -21,17 +23,17 @@ class UploadHeap final {
   explicit UploadHeap(ExecutionContext* execution_context);
   ~UploadHeap();
 
-  void UploadResourceWithRingBuffer(ID3D12Resource* dst_resource,
-                                    uint64_t dst_offset,
-                                    void const* src_data,
-                                    size_t src_byte_length);
+  ID3D12Resource* UploadResourceWithRingBuffer(
+    ConstantsInfoPtr& constants_info);
 
  private:
   ComPtr<ID3D12Resource> CreateRingBuffer(size_t src_byte_length);
   static constexpr uint64_t kRingBufferSize = 4 * 1024 * 1024;
 
   ExecutionContext* execution_context_;
-  std::vector<ComPtr<ID3D12Resource>> ring_buffers_;
+  ComPtr<ID3D12Resource> ring_buffers_;
+  // TODO::
+  ComPtr<ID3D12Resource> constants_resource_;
 };
 
 }  // namespace content::webnn
