@@ -145,6 +145,11 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   ComPtr<ID3D12Resource> mInputResource = nullptr;
   ComPtr<ID3D12Resource> mOutputResource = nullptr;
   ComPtr<ID3D12Resource> mReadBackResource = nullptr;
+#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
+#else
+  // std::vector<ComPtr<ID3D12Resource>> constants_resource_;
+  std::vector<ComPtr<ID3D12Resource>> inputs_resource_;
+#endif
 
   // Describe a graph of DirectML operators used to compile a combined,
   // optimized operator.
@@ -172,7 +177,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   std::vector<std::unique_ptr<DML_OUTPUT_GRAPH_EDGE_DESC>> mOutputEdgesDesc;
   std::vector<std::unique_ptr<DML_INTERMEDIATE_GRAPH_EDGE_DESC>>
       mIntermediateEdgesDesc;
-  std::vector<std::unique_ptr<char>> mConstantsBuffer;
 
   std::string error_messages_;
   BuildResult build_result_;

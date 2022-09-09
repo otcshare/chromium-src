@@ -11,6 +11,20 @@ CommandRecorder::~CommandRecorder() = default;
 CommandRecorder::CommandRecorder(ComPtr<IDMLDevice> dml_device)
     : dml_device_(dml_device) {}
 
+void CommandRecorder::ResourceBarrier(
+    std::vector<const D3D12_RESOURCE_BARRIER> barriers) {
+  command_list_->ResourceBarrier(barriers.size(), barriers.data());
+}
+
+void CommandRecorder::CopyBufferRegion(ID3D12Resource* dst_buffer,
+                                       uint64_t dst_offset,
+                                       ID3D12Resource* src_buffer,
+                                       uint64_t src_offset,
+                                       uint64_t byte_length) {
+  command_list_->CopyBufferRegion(dst_buffer, dst_offset, src_buffer,
+                                  src_offset, byte_length);
+}
+
 HRESULT CommandRecorder::Initialize() {
   HRESULT hr = dml_device_->GetParentDevice(IID_PPV_ARGS(&d3d12_device_));
   if (FAILED(hr)) {
@@ -44,7 +58,8 @@ HRESULT CommandRecorder::Initialize() {
 
 HRESULT CommandRecorder::InitializeOperator(
     IDMLCompiledOperator* compiled_operator,
-    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs) {
+    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+    const DML_BINDING_DESC& input_array_binding) {
   // Reset the initializer to reference the compiled operator.
   IDMLCompiledOperator* ops[] = {compiled_operator};
   HRESULT hr = operator_initializer_->Reset(ARRAYSIZE(ops), ops);
@@ -135,55 +150,62 @@ HRESULT CommandRecorder::InitializeOperator(
   }
 
   // Initialize constant inputs.
-  uint64_t constantInputsResourceSize = 0;
-  for (auto& input : inputs) {
-    if (input->isConstantInput) {
-      uint64_t offset =
-          RoundUpToMultiple(constantInputsResourceSize,
-                            (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-      constantInputsResourceSize = offset + input->byteLength;
-    }
-  }
+  // uint64_t constantInputsResourceSize = 0;
+  // for (auto& input : inputs) {
+  //   if (input->isConstantInput) {
+  //     uint64_t offset =
+  //         RoundUpToMultiple(constantInputsResourceSize,
+  //                           (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+  //     constantInputsResourceSize = offset + input->byteLength;
+  //   }
+  // }
 
-  if (constantInputsResourceSize) {
-    D3D12_HEAP_PROPERTIES upload_heap_properties =
-        CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    D3D12_RESOURCE_DESC upload_resource_desc =
-        CreateResourceDesc(constantInputsResourceSize);
-    hr = d3d12_device_->CreateCommittedResource(
-        &upload_heap_properties, D3D12_HEAP_FLAG_NONE, &upload_resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&mUploadResource));
-    if (FAILED(hr)) {
-      return hr;
-    }
+  // if (constantInputsResourceSize) {
+  //   D3D12_HEAP_PROPERTIES upload_heap_properties =
+  //       CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
+  //   D3D12_RESOURCE_DESC upload_resource_desc =
+  //       CreateResourceDesc(constantInputsResourceSize);
+  //   hr = d3d12_device_->CreateCommittedResource(
+  //       &upload_heap_properties, D3D12_HEAP_FLAG_NONE, &upload_resource_desc,
+  //       D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+  //       IID_PPV_ARGS(&mUploadResource));
+  //   if (FAILED(hr)) {
+  //     return hr;
+  //   }
 
-    D3D12_HEAP_PROPERTIES input_heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC input_resource_desc = CreateResourceDesc(
-        constantInputsResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    hr = d3d12_device_->CreateCommittedResource(
-        &input_heap_properties, D3D12_HEAP_FLAG_NONE, &input_resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mInputResource));
-    if (FAILED(hr)) {
-      return hr;
-    }
+  //   D3D12_HEAP_PROPERTIES input_heap_properties = CreateHeapProperties();
+  //   D3D12_RESOURCE_DESC input_resource_desc = CreateResourceDesc(
+  //       constantInputsResourceSize,
+  //       D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+  //   hr = d3d12_device_->CreateCommittedResource(
+  //       &input_heap_properties, D3D12_HEAP_FLAG_NONE, &input_resource_desc,
+  //       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+  //       IID_PPV_ARGS(&mInputResource));
+  //   if (FAILED(hr)) {
+  //     return hr;
+  //   }
 
-    std::vector<DML_BUFFER_BINDING> inputBufferBinding(inputs.size());
-    FillUploadResourceAndInputBindings(constantInputsResourceSize,
-                                       inputBufferBinding, {}, inputs,
-                                       mUploadResource, mInputResource);
-    // Copy buffer from mUploadResource to mInputResource.
-    CopyBufferRegion(command_list_, mUploadResource, mInputResource,
-                     constantInputsResourceSize,
-                     D3D12_RESOURCE_STATE_COPY_DEST);
+  //   std::vector<DML_BUFFER_BINDING> inputBufferBinding(inputs.size());
+  //   FillUploadResourceAndInputBindings(constantInputsResourceSize,
+  //                                      inputBufferBinding, {}, inputs,
+  //                                      mUploadResource, mInputResource);
+  //   // Copy buffer from mUploadResource to mInputResource.
+  //   CopyBufferRegion(mInputResource, mUploadResource,
+  //                    constantInputsResourceSize,
+  //                    D3D12_RESOURCE_STATE_COPY_DEST);
 
-    DML_BUFFER_ARRAY_BINDING inputBufferArrayBinding = {};
-    inputBufferArrayBinding.BindingCount = inputBufferBinding.size();
-    inputBufferArrayBinding.Bindings = inputBufferBinding.data();
-    DML_BINDING_DESC inputBindingDesc{DML_BINDING_TYPE_BUFFER_ARRAY,
-                                      &inputBufferArrayBinding};
-    mBindingTable->BindInputs(1, &inputBindingDesc);
+  //   DML_BUFFER_ARRAY_BINDING inputBufferArrayBinding = {};
+  //   inputBufferArrayBinding.BindingCount = inputBufferBinding.size();
+  //   inputBufferArrayBinding.Bindings = inputBufferBinding.data();
+  //   DML_BINDING_DESC inputBindingDesc{DML_BINDING_TYPE_BUFFER_ARRAY,
+  //                                     &inputBufferArrayBinding};
+  //   mBindingTable->BindInputs(1, &inputBindingDesc);
+  // }
+  // Bind inputs if there are constant data.
+  if (input_array_binding.Type != DML_BINDING_TYPE_NONE) {
+    // An operator with inputs to bind be a BUFFER_ARRAY type.
+    DCHECK(input_array_binding.Type == DML_BINDING_TYPE_BUFFER_ARRAY);
+    mBindingTable->BindInputs(1, &input_array_binding);
   }
 
   // Record execution of the operator initializer.
@@ -230,8 +252,9 @@ HRESULT CommandRecorder::ExecuteOperator(
         commonInputsResourceSize, inputBufferBinding, std::move(namedInputs),
         inputs, uploadResource, inputResource);
     // Copy buffer from uploadResource to inputResource.
-    CopyBufferRegion(command_list_, uploadResource, inputResource,
-                     commonInputsResourceSize, D3D12_RESOURCE_STATE_COPY_DEST);
+    CopyBufferRegionUtil(command_list_, uploadResource, inputResource,
+                         commonInputsResourceSize,
+                         D3D12_RESOURCE_STATE_COPY_DEST);
 
     std::vector<DML_BINDING_DESC> inputBindingDesc(inputs.size());
     for (size_t i = 0; i < inputBufferBinding.size(); ++i) {
@@ -269,14 +292,14 @@ void CommandRecorder::FillUploadResourceAndInputBindings(
     auto input = inputs[i];
     if (namedInputs.get() == nullptr) {
       if (input->isConstantInput) {
-        offset = RoundUpToMultiple(
-            offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-        inputBufferBinding[i].Buffer = inputResource.Get();
-        inputBufferBinding[i].Offset = offset;
-        inputBufferBinding[i].SizeInBytes = input->byteLength;
-        memcpy(uploadBuffer + offset, input->buffer,
-               static_cast<size_t>(input->byteLength));
-        offset = offset + input->byteLength;
+        // offset = RoundUpToMultiple(
+        //     offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+        // inputBufferBinding[i].Buffer = inputResource.Get();
+        // inputBufferBinding[i].Offset = offset;
+        // inputBufferBinding[i].SizeInBytes = input->byteLength;
+        // memcpy(uploadBuffer + offset, input->buffer,
+        //        static_cast<size_t>(input->byteLength));
+        // offset = offset + input->byteLength;
       }
     } else {
       if (!input->isConstantInput) {

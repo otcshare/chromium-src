@@ -19,14 +19,14 @@ HRESULT AdapterDML::Initialize() {
     return hr;
   }
 
-  D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
-  command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-  hr = d3d12_device_->CreateCommandQueue(&command_queue_desc,
-                                         IID_PPV_ARGS(&command_queue_));
-  if (FAILED(hr)) {
-    return hr;
-  }
+  // D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
+  // command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  // command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+  // hr = d3d12_device_->CreateCommandQueue(&command_queue_desc,
+  //                                        IID_PPV_ARGS(&command_queue_));
+  // if (FAILED(hr)) {
+  //   return hr;
+  // }
 
   hr = DMLCreateDevice(d3d12_device_.Get(), DML_CREATE_DEVICE_FLAG_NONE,
                        IID_PPV_ARGS(&dml_device_));
@@ -57,14 +57,19 @@ AdapterType AdapterDML::GetAdapterType() {
   return adapter_type_;
 }
 
-ComPtr<IDMLDevice> AdapterDML::GetDMLDevice() {
+ComPtr<ID3D12Device> AdapterDML::GetD3D12Device() const {
+  DCHECK(d3d12_device_.Get() != nullptr);
+  return d3d12_device_;
+}
+
+ComPtr<IDMLDevice> AdapterDML::GetDMLDevice() const {
   DCHECK(dml_device_.Get() != nullptr);
   return dml_device_;
 }
 
-ComPtr<ID3D12CommandQueue> AdapterDML::GetCommandQueue() {
-  DCHECK(command_queue_.Get() != nullptr);
-  return command_queue_;
-}
+// ComPtr<ID3D12CommandQueue> AdapterDML::GetCommandQueue() const {
+//   DCHECK(command_queue_.Get() != nullptr);
+//   return command_queue_;
+// }
 
 }  // namespace content::webnn

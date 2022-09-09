@@ -28,8 +28,43 @@ namespace content::webnn {
 using namespace Microsoft::WRL;
 using ml::webnn::mojom::AutoPad;
 
+inline ComPtr<ID3D12Resource> CreateCommittedResource(
+    ID3D12Device* d3d12_device,
+    D3D12_HEAP_TYPE heap_type,
+    const D3D12_RESOURCE_DESC& resource_descriptor,
+    D3D12_RESOURCE_STATES initial_usage) {
+  D3D12_HEAP_PROPERTIES heap_properties;
+  heap_properties.Type = heap_type;
+  heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
+  heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;
+  heap_properties.CreationNodeMask = 1;
+  heap_properties.VisibleNodeMask = 1;
+
+  // Check the resource size is valid, too large size could cause a device loss
+  // when creating the resource.
+  D3D12_RESOURCE_ALLOCATION_INFO resource_info =
+      d3d12_device->GetResourceAllocationInfo(
+          0, 1, &resource_descriptor);
+  if (resource_info.SizeInBytes == 0 ||
+      resource_info.SizeInBytes == std::numeric_limits<uint64_t>::max()) {
+    // Invalid resource
+    return nullptr;
+  }
+
+  ComPtr<ID3D12Resource> committed_resource;
+  // D3D12 creates an implicit heap that contains the resource allocation when
+  // calling CreateCommittedResource.
+  // TODO: Store a heap object for every allocated ResourceAllocation that will
+  // be managed by residency management.
+  d3d12_device->CreateCommittedResource(
+      &heap_properties, D3D12_HEAP_FLAG_NONE, &resource_descriptor,
+      initial_usage, nullptr, IID_PPV_ARGS(&committed_resource));
+
+  return committed_resource;
+}
+
 // TODO
-inline void CopyBufferRegion(ComPtr<ID3D12GraphicsCommandList> commandList,
+inline void CopyBufferRegionUtil(ComPtr<ID3D12GraphicsCommandList> commandList,
                              ComPtr<ID3D12Resource> srcResource,
                              ComPtr<ID3D12Resource> destResource,
                              UINT64 resourceSize,
@@ -105,11 +140,12 @@ struct EdgeInfoBase {
 
 // Only represent the information of the input edges.
 struct InputEdgeInfo final : public EdgeInfoBase {
-  ~InputEdgeInfo() override = default;
+  InputEdgeInfo();
+  ~InputEdgeInfo() override;
   // Indicate the index of the graph's input.
   size_t inputIndex = 0;
-  void const* buffer = nullptr;
   size_t byteLength = 0;
+  ComPtr<ID3D12Resource> resource;
   // Indicate if the input is from constant buffer which need to be
   // uploaded in the stage of initialization.
   bool isConstantInput = false;

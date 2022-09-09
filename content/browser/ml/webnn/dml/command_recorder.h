@@ -27,9 +27,18 @@ class CommandRecorder final {
 
   HRESULT Initialize();
 
+  void ResourceBarrier(std::vector<const D3D12_RESOURCE_BARRIER> barriers);
+
+  void CopyBufferRegion(ID3D12Resource* dst_buffer,
+                        uint64_t dst_offset,
+                        ID3D12Resource* src_buffer,
+                        uint64_t src_offset,
+                        uint64_t byte_length);
+
   HRESULT InitializeOperator(
       IDMLCompiledOperator* compiled_operator,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs);
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+      const DML_BINDING_DESC& input_array_binding);
 
   HRESULT ExecuteOperator(
       IDMLCompiledOperator* compiled_operator,
@@ -65,8 +74,8 @@ class CommandRecorder final {
   DML_BINDING_TABLE_DESC mBindingTableDesc;
   ComPtr<IDMLBindingTable> mBindingTable;
 
-  ComPtr<ID3D12Resource> mUploadResource;
-  ComPtr<ID3D12Resource> mInputResource;
+  // ComPtr<ID3D12Resource> mUploadResource;
+  // ComPtr<ID3D12Resource> mInputResource;
   ComPtr<ID3D12Resource> mTemporaryResource;
   ComPtr<ID3D12Resource> mPersistentResource;
 

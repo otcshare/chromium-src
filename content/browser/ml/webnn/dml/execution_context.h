@@ -16,6 +16,9 @@ namespace content::webnn {
 
 using Microsoft::WRL::ComPtr;
 class AdapterDML;
+class ResourceAllocation;
+class ResourceAllocatorManager;
+class UploadHeap;
 
 class ExecutionContext final : public base::RefCounted<ExecutionContext> {
  public:
@@ -26,9 +29,16 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
 
   HRESULT Initialize();
 
+  void CopyBufferRegion(ID3D12Resource* dest_resource,
+                        ID3D12Resource* src_resource,
+                        UINT64 resource_size,
+                        D3D12_RESOURCE_STATES state,
+                        bool needBarrierEnd = true);
+
   HRESULT InitializeOperator(
       IDMLCompiledOperator* compiled_operator,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs);
+      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
+      const DML_BINDING_DESC& input_array_binding);
 
   HRESULT ExecuteOperator(
       IDMLCompiledOperator* compiled_operator,
@@ -39,8 +49,17 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
       ComPtr<ID3D12Resource> uploadResource,
       ComPtr<ID3D12Resource> inputResource);
 
+  ComPtr<ID3D12Device> GetD3D12Device() const;
+  ComPtr<ID3D12CommandQueue> GetCommandQueue() const;
+  UploadHeap* GetUploadHeap();
+
+  // ResourceAllocation AllocateMemory(
+  //     D3D12_HEAP_TYPE heap_type,
+  //     const D3D12_RESOURCE_DESC& resource_descriptor,
+  //     D3D12_RESOURCE_STATES initial_usage);
+  // void DeallocateMemory(ResourceAllocation& allocation);
+
   // TODO
-  ComPtr<ID3D12CommandQueue> GetCommandQueue();
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
   ComPtr<ID3D12GraphicsCommandList> GetCommandList();
   ComPtr<IDMLDevice> GetDMLDevice();
@@ -49,10 +68,15 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
   friend class base::RefCounted<ExecutionContext>;
   ~ExecutionContext();
 
-  // A shared command queue for all contexts that is owned by GPU process.
+  // Device is owned by adapter.
+  ComPtr<ID3D12Device> d3d12_device_;
+  // Open discussion: Another design is to share command queue for all contexts.
   ComPtr<ID3D12CommandQueue> command_queue_;
   // There is one active command recorder at a time.
   CommandRecorder command_recorder_;
+
+  std::unique_ptr<UploadHeap> upload_heap_;
+  // std::unique_ptr<ResourceAllocatorManager> resource_allocator_manager_;
 };
 
 }  // namespace content::webnn
