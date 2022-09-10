@@ -21,12 +21,20 @@ buildflag_header("buildflags") {
 
 source_set("lib") {
   sources = [
+    "dml/adapter_dml.cc",
+    "dml/adapter_dml.h",
+    "dml/command_recorder.cc",
+    "dml/command_recorder.h",
     "dml/context_dml_impl.cc",
     "dml/context_dml_impl.h",
+    "dml/execution_context.cc",
+    "dml/execution_context.h",
     "dml/graph_dml_impl.cc",
     "dml/graph_dml_impl.h",
     "dml/mojo_server_dml_impl.cc",
     "dml/mojo_server_dml_impl.h",
+    "dml/upload_heap.cc",
+    "dml/upload_heap.h",
     "dml/utils_dml.h",
     "dml/webnn_service_dml_impl.cc",
     "dml/webnn_service_dml_impl.h",

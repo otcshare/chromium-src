@@ -193,6 +193,13 @@ struct NamedInputs {
   mojo_base.mojom.ReadOnlySharedMemoryRegion shared_memory@1;
 };
 
+[Stable]
+struct ConstantsInfo {
+  // The key is object id to identify constant operand.
+  map<uint32, MemoryInfo> constants@0;
+  mojo_base.mojom.ReadOnlySharedMemoryRegion shared_memory@1;
+};
+
 // Represents the `MLNamedOutputs`.
 [Stable]
 struct NamedOutputs {
@@ -229,7 +236,7 @@ interface Graph {
   // bufferView)` array buffer implementation in `MLGraphBuilder`.
   // It's to add a constant operand in the graph with the descriptor and data
   // that is cpu buffer.
-  AddConstant@1(OperandDescriptor desc, array<uint8> array_buffer);
+  AddConstant@1(OperandDescriptor desc);
 
   // Add element-wise binary addition, subtraction, multiplication, division
   // defined in `BinaryOperandType`. `a_id` is the object id of first input
@@ -282,7 +289,8 @@ interface Graph {
   // Compile the `MLGraphBuild` state up to the specified output operands into
   // a compiled graph according to the type of `MLContext` that creates it.
   // `result` is the status of building graph.
-  Build@11(map<string, uint32> named_operands) => (BuildResult result);
+  Build@11(map<string, uint32> named_operands, ConstantsInfo constant_info)
+      => (BuildResult result);
 
   // Carries out the computational workload of a compiled graph.
   // `named_inputs` is the resources of inputs with shared memory,

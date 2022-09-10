@@ -11,20 +11,23 @@
 
 namespace content::webnn {
 
+class AdapterDML;
+class ExecutionContext;
+
 class ContextDMLImpl : public ml::webnn::mojom::Context {
  public:
   ~ContextDMLImpl() override;
-  static void Create(mojo::PendingReceiver<ml::webnn::mojom::Context> receiver);
+  explicit ContextDMLImpl(scoped_refptr<AdapterDML> adapter);
 
   ContextDMLImpl(const ContextDMLImpl&) = delete;
   ContextDMLImpl& operator=(const ContextDMLImpl&) = delete;
 
- protected:
-  ContextDMLImpl();
+  HRESULT Initialize();
 
  private:
   // ml::webnn::mojom::context
   void CreateGraph(uint32_t, CreateGraphCallback) override;
+  scoped_refptr<ExecutionContext> execution_context_;
 };
 
 }  // namespace content::webnn

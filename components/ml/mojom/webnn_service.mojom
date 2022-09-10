@@ -14,6 +14,8 @@ const sandbox.mojom.Sandbox kWebnnSandbox = sandbox.mojom.Sandbox.kGpu;
 struct ContextOptions {
   // The device to be used (e.g. "auto", "cpu", "gpu" etc.).
   ml.model_loader.mojom.DevicePreference device_preference@0;
+  // The power preference indicates preference as related to power consumption.
+  ml.model_loader.mojom.PowerPreference power_preference@1;
 };
 
 // The interface is used to factory interfaces in WebNN such as `MLContext`.
