@@ -29,7 +29,7 @@ std::map<AdapterType, scoped_refptr<AdapterDML>> EumerateAdapters() {
   // more adapters to enumerate.
   ComPtr<IDXGIAdapter1> dxgi_adapter;
   uint32_t adapter_index = 0;
-  while (dxgi_factory->EnumAdapters1(adapter_index++, &dxgi_adapter) !=
+  while (dxgi_factory->EnumAdapters1(++adapter_index, &dxgi_adapter) !=
          DXGI_ERROR_NOT_FOUND) {
     ComPtr<IDXGIAdapter3> dxgi_adapter3 = nullptr;
     hr = dxgi_adapter.As(&dxgi_adapter3);
