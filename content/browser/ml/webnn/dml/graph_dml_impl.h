@@ -70,13 +70,14 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
  public:
   ~GraphDMLImpl() override;
   static void Create(mojo::PendingReceiver<ml::webnn::mojom::Graph> receiver,
-                     scoped_refptr<ExecutionContext> execution_context);
+                     scoped_refptr<ExecutionContext> execution_context,
+                     uint32_t graph_id);
 
   GraphDMLImpl(const GraphDMLImpl&) = delete;
   GraphDMLImpl& operator=(const GraphDMLImpl&) = delete;
 
  protected:
-  GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context);
+  GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context, uint32_t graph_id);
 
  private:
   // ml::webnn::mojom::Graph
@@ -126,6 +127,7 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   void AddOutput(const std::string&, uint32_t);
 
   scoped_refptr<ExecutionContext> execution_context_;
+  uint32_t graph_id_;
   // Represents a DirectML device, which is used to create operators, binding
   // tables, command recorders, and other objects.
   ComPtr<IDMLDevice> mDevice;

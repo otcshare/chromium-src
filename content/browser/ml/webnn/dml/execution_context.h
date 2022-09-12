@@ -18,7 +18,7 @@ using Microsoft::WRL::ComPtr;
 class AdapterDML;
 class ResourceAllocation;
 class ResourceAllocatorManager;
-class UploadHeap;
+class UnorderedResources;
 
 class ExecutionContext final : public base::RefCounted<ExecutionContext> {
  public:
@@ -35,12 +35,12 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
                         D3D12_RESOURCE_STATES state,
                         bool needBarrierEnd = true);
 
-  HRESULT InitializeOperator(
-      IDMLCompiledOperator* compiled_operator,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-      const DML_BINDING_DESC& input_array_binding);
+  HRESULT InitializeGraph(uint32_t graph_id,
+                          IDMLCompiledOperator* compiled_operator,
+                          const DML_BINDING_DESC& input_array_binding);
 
-  HRESULT ExecuteOperator(
+  HRESULT ExecuteGraph(
+      uint32_t graph_id,
       IDMLCompiledOperator* compiled_operator,
       NamedInputsPtr namedInputs,
       const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
@@ -51,7 +51,7 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
 
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<ID3D12CommandQueue> GetCommandQueue() const;
-  UploadHeap* GetUploadHeap();
+  UnorderedResources* GetUnorderedResources();
 
   // ResourceAllocation AllocateMemory(
   //     D3D12_HEAP_TYPE heap_type,
@@ -75,7 +75,7 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
   // There is one active command recorder at a time.
   CommandRecorder command_recorder_;
 
-  std::unique_ptr<UploadHeap> upload_heap_;
+  std::unique_ptr<UnorderedResources> unordered_resources_;
   // std::unique_ptr<ResourceAllocatorManager> resource_allocator_manager_;
 };
 

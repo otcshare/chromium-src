@@ -8,6 +8,7 @@
 #include "base/memory/ptr_util.h"
 #include "content/browser/ml/webnn/dml/execution_context.h"
 #include "content/browser/ml/webnn/dml/graph_dml_impl.h"
+#include "content/browser/ml/webnn/dml/unordered_resources.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
 #include "content/browser/ml/webnn/fusion_operators.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -502,16 +503,19 @@ InputEdgeInfo::~InputEdgeInfo() = default;
 
 // static
 void GraphDMLImpl::Create(mojo::PendingReceiver<Graph> receiver,
-                          scoped_refptr<ExecutionContext> execution_context) {
+                          scoped_refptr<ExecutionContext> execution_context,
+                          uint32_t graph_id) {
   mojo::MakeSelfOwnedReceiver<Graph>(
-      base::WrapUnique(new GraphDMLImpl(execution_context)),
+      base::WrapUnique(new GraphDMLImpl(execution_context, graph_id)),
       std::move(receiver));
 }
 
 GraphDMLImpl::~GraphDMLImpl() = default;
 
-GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context)
+GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context,
+                           uint32_t graph_id)
     : execution_context_(execution_context),
+      graph_id_(graph_id),
       fusion_operators_(std::make_unique<FusionOperators>()) {
   mCommandQueue = execution_context->GetCommandQueue();
   mCommandAllocator = execution_context->GetCommandAllocator();
@@ -1373,28 +1377,37 @@ void GraphDMLImpl::Build(
 
   // Upload the data to GPU so that the constant data are not saved as member
   // variable.
-  UploadHeap* uploader = execution_context_->GetUploadHeap();
-  ID3D12Resource* constants_resource =
-      uploader->UploadResourceWithRingBuffer(constants_info);
-  std::vector<DML_BUFFER_BINDING> constant_buffer_binding(mInputs.size());
+  std::unique_ptr<UploadHeap> uploader =
+      std::make_unique<UploadHeap>(execution_context_.get());
+  ComPtr<ID3D12Resource> constants_resource = nullptr;
+  if (constants_info.get() != nullptr) {
+    base::ReadOnlySharedMemoryRegion& shared_memory_region =
+        constants_info->shared_memory;
+    size_t constants_byte_length = shared_memory_region.GetSize();
+    UnorderedResources* unordered_resources =
+        execution_context_->GetUnorderedResources();
+    constants_resource = unordered_resources->Allocate(constants_byte_length);
+    uploader->UploadConstants(constants_resource.Get(), constants_info);
+  }
+  std::vector<DML_BUFFER_BINDING> input_buffer_binding(mInputs.size());
   for (size_t i = 0; i < mInputs.size(); ++i) {
     auto input = mInputs[i];
     if (input->isConstantInput) {
-      constant_buffer_binding[i].Buffer = constants_resource;
+      input_buffer_binding[i].Buffer = constants_resource.Get();
       auto& memory_info = constants_info->constants[input->object_id];
-      constant_buffer_binding[i].Offset = memory_info->byte_offset;
-      constant_buffer_binding[i].SizeInBytes = memory_info->byte_length;
+      input_buffer_binding[i].Offset = memory_info->byte_offset;
+      input_buffer_binding[i].SizeInBytes = memory_info->byte_length;
     }
   }
 
-  DML_BUFFER_ARRAY_BINDING constant_buffer_array_binding = {};
-  constant_buffer_array_binding.BindingCount = constant_buffer_binding.size();
-  constant_buffer_array_binding.Bindings = constant_buffer_binding.data();
-  DML_BINDING_DESC constant_binding_desc{DML_BINDING_TYPE_BUFFER_ARRAY,
-                                         &constant_buffer_array_binding};
+  DML_BUFFER_ARRAY_BINDING input_buffer_array_binding = {};
+  input_buffer_array_binding.BindingCount = input_buffer_binding.size();
+  input_buffer_array_binding.Bindings = input_buffer_binding.data();
+  DML_BINDING_DESC input_binding_desc{DML_BINDING_TYPE_BUFFER_ARRAY,
+                                      &input_buffer_array_binding};
 
-  execution_context_->InitializeOperator(mCompiledOperator.Get(), mInputs,
-                                         constant_binding_desc);
+  execution_context_->InitializeGraph(graph_id_, mCompiledOperator.Get(),
+                                      input_binding_desc);
 
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
                         mD3D12Device);
@@ -1495,10 +1508,10 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
     outputOffset = outputOffset + byteLength;
   }
 
-  execution_context_->ExecuteOperator(
-      mCompiledOperator.Get(), std::move(named_inputs), mInputs,
-      outputBindingDesc, mCommonInputsResourceSize, mUploadResource,
-      mInputResource);
+  execution_context_->ExecuteGraph(graph_id_, mCompiledOperator.Get(),
+                                   std::move(named_inputs), mInputs,
+                                   outputBindingDesc, mCommonInputsResourceSize,
+                                   mUploadResource, mInputResource);
 
   // Copy buffer from outputResource to readBackResource.
   CopyBufferRegionUtil(mCommandList, mOutputResource, mReadBackResource,

@@ -17,6 +17,8 @@ namespace content::webnn {
 using Microsoft::WRL::ComPtr;
 using ml::webnn::mojom::NamedInputsPtr;
 
+class UnorderedResources;
+
 class CommandRecorder final {
  public:
   explicit CommandRecorder(ComPtr<IDMLDevice> dml_device);
@@ -35,12 +37,12 @@ class CommandRecorder final {
                         uint64_t src_offset,
                         uint64_t byte_length);
 
-  HRESULT InitializeOperator(
-      IDMLCompiledOperator* compiled_operator,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-      const DML_BINDING_DESC& input_array_binding);
+  HRESULT InitializeGraph(uint32_t graph_id,
+                          IDMLCompiledOperator* compiled_operator,
+                          const DML_BINDING_DESC& input_array_binding);
 
-  HRESULT ExecuteOperator(
+  HRESULT ExecuteGraph(
+      uint32_t graph_id,
       IDMLCompiledOperator* compiled_operator,
       NamedInputsPtr namedInputs,
       const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
@@ -48,6 +50,8 @@ class CommandRecorder final {
       UINT64 commonInputsResourceSize,
       ComPtr<ID3D12Resource> uploadResource,
       ComPtr<ID3D12Resource> inputResource);
+
+  void SetUnorderedResources(UnorderedResources* resources);
 
   // TODO:
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
@@ -70,17 +74,11 @@ class CommandRecorder final {
   ComPtr<IDMLOperatorInitializer> operator_initializer_;
   ComPtr<IDMLCommandRecorder> command_recorder_;
 
+  UnorderedResources* unordered_resources_;
+
   ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
   DML_BINDING_TABLE_DESC mBindingTableDesc;
   ComPtr<IDMLBindingTable> mBindingTable;
-
-  // ComPtr<ID3D12Resource> mUploadResource;
-  // ComPtr<ID3D12Resource> mInputResource;
-  ComPtr<ID3D12Resource> mTemporaryResource;
-  ComPtr<ID3D12Resource> mPersistentResource;
-
-  UINT64 mTemporaryResourceSize = 0;
-  UINT64 mPersistentResourceSize = 0;
 };
 
 }  // namespace content::webnn
