@@ -159,12 +159,8 @@ HRESULT CommandRecorder::InitializeGraph(
 HRESULT CommandRecorder::ExecuteGraph(
     uint32_t graph_id,
     IDMLCompiledOperator* compiled_operator,
-    NamedInputsPtr namedInputs,
-    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-    const std::vector<DML_BINDING_DESC>& output_bindings,
-    UINT64 commonInputsResourceSize,
-    ComPtr<ID3D12Resource> uploadResource,
-    ComPtr<ID3D12Resource> inputResource) {
+    const std::vector<DML_BINDING_DESC>& input_bindings,
+    const std::vector<DML_BINDING_DESC>& output_bindings) {
   // Bind and execute the operator on the GPU.
   // Reset the binding table to bind for the operator we want to execute (it
   // was previously used to bind for the initializer).
@@ -193,26 +189,7 @@ HRESULT CommandRecorder::ExecuteGraph(
     mBindingTable->BindPersistentResource(&bindingDesc);
   }
 
-  // Initialize common inputs.
-  if (commonInputsResourceSize) {
-    std::vector<DML_BUFFER_BINDING> inputBufferBinding(inputs.size());
-    FillUploadResourceAndInputBindings(
-        commonInputsResourceSize, inputBufferBinding, std::move(namedInputs),
-        inputs, uploadResource, inputResource);
-    // Copy buffer from uploadResource to inputResource.
-    CopyBufferRegionUtil(command_list_, uploadResource, inputResource,
-                         commonInputsResourceSize,
-                         D3D12_RESOURCE_STATE_COPY_DEST);
-
-    std::vector<DML_BINDING_DESC> inputBindingDesc(inputs.size());
-    for (size_t i = 0; i < inputBufferBinding.size(); ++i) {
-      if (inputBufferBinding[i].Buffer != nullptr) {
-        inputBindingDesc[i] = {DML_BINDING_TYPE_BUFFER, &inputBufferBinding[i]};
-      }
-    }
-    mBindingTable->BindInputs(inputBindingDesc.size(), inputBindingDesc.data());
-  }
-
+  mBindingTable->BindInputs(input_bindings.size(), input_bindings.data());
   mBindingTable->BindOutputs(output_bindings.size(), output_bindings.data());
 
   // Record execution of the compiled operator.
@@ -226,48 +203,6 @@ HRESULT CommandRecorder::ExecuteGraph(
 
 void CommandRecorder::SetUnorderedResources(UnorderedResources* resources) {
   unordered_resources_ = resources;
-}
-
-void CommandRecorder::FillUploadResourceAndInputBindings(
-    uint64_t uploadResourceSize,
-    std::vector<DML_BUFFER_BINDING>& inputBufferBinding,
-    NamedInputsPtr namedInputs,
-    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-    ComPtr<ID3D12Resource> uploadResource,
-    ComPtr<ID3D12Resource> inputResource) {
-  D3D12_RANGE uploadBufferRange{0, uploadResourceSize};
-  int8_t* uploadBuffer;
-  WEBNN_CHECK(uploadResource->Map(0, &uploadBufferRange,
-                                  reinterpret_cast<void**>(&uploadBuffer)));
-  uint64_t offset = 0;
-  for (size_t i = 0; i < inputs.size(); ++i) {
-    auto input = inputs[i];
-    if (namedInputs.get() == nullptr) {
-      if (input->isConstantInput) {
-      }
-    } else {
-      if (!input->isConstantInput) {
-        offset = RoundUpToMultiple(
-            offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-        ml::webnn::mojom::MemoryInfoPtr memory_info =
-            std::move(namedInputs->inputs[input->name]);
-        base::ReadOnlySharedMemoryRegion& shared_memory_region =
-            namedInputs->shared_memory;
-        DCHECK(shared_memory_region.IsValid());
-        base::ReadOnlySharedMemoryMapping shared_memory_mapping =
-            shared_memory_region.MapAt(memory_info->byte_offset,
-                                       memory_info->byte_length);
-        inputBufferBinding[i].Buffer = inputResource.Get();
-        inputBufferBinding[i].Offset = offset;
-        inputBufferBinding[i].SizeInBytes = memory_info->byte_length;
-        memcpy(uploadBuffer + offset,
-               shared_memory_mapping.GetMemoryAs<uint8_t>(),
-               memory_info->byte_length);
-        offset = offset + memory_info->byte_length;
-      }
-    }
-  }
-  uploadResource->Unmap(0, nullptr);
 }
 
 ComPtr<ID3D12CommandAllocator> CommandRecorder::GetCommandAllocator() {

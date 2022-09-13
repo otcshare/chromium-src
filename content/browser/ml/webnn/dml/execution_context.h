@@ -11,6 +11,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "content/browser/ml/webnn/dml/command_recorder.h"
+#include "content/browser/ml/webnn/dml/unordered_resources.h"
 
 namespace content::webnn {
 
@@ -18,7 +19,6 @@ using Microsoft::WRL::ComPtr;
 class AdapterDML;
 class ResourceAllocation;
 class ResourceAllocatorManager;
-class UnorderedResources;
 
 class ExecutionContext final : public base::RefCounted<ExecutionContext> {
  public:
@@ -42,12 +42,8 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
   HRESULT ExecuteGraph(
       uint32_t graph_id,
       IDMLCompiledOperator* compiled_operator,
-      NamedInputsPtr namedInputs,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-      const std::vector<DML_BINDING_DESC>& output_bindings,
-      UINT64 commonInputsResourceSize,
-      ComPtr<ID3D12Resource> uploadResource,
-      ComPtr<ID3D12Resource> inputResource);
+      const std::vector<DML_BINDING_DESC>& input_bindings,
+      const std::vector<DML_BINDING_DESC>& output_bindings);
 
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<ID3D12CommandQueue> GetCommandQueue() const;

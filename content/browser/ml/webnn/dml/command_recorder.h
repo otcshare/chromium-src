@@ -44,12 +44,8 @@ class CommandRecorder final {
   HRESULT ExecuteGraph(
       uint32_t graph_id,
       IDMLCompiledOperator* compiled_operator,
-      NamedInputsPtr namedInputs,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-      const std::vector<DML_BINDING_DESC>& output_bindings,
-      UINT64 commonInputsResourceSize,
-      ComPtr<ID3D12Resource> uploadResource,
-      ComPtr<ID3D12Resource> inputResource);
+      const std::vector<DML_BINDING_DESC>& input_bindings,
+      const std::vector<DML_BINDING_DESC>& output_bindings);
 
   void SetUnorderedResources(UnorderedResources* resources);
 
@@ -57,13 +53,6 @@ class CommandRecorder final {
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
   ComPtr<ID3D12GraphicsCommandList> GetCommandList();
   ComPtr<IDMLDevice> GetDMLDevice();
-  void FillUploadResourceAndInputBindings(
-      UINT64 uploadResourceSize,
-      std::vector<DML_BUFFER_BINDING>& inputBufferBinding,
-      NamedInputsPtr namedInputs,
-      const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-      ComPtr<ID3D12Resource> uploadResource,
-      ComPtr<ID3D12Resource> inputResource);
 
  private:
   ComPtr<IDMLDevice> dml_device_;
