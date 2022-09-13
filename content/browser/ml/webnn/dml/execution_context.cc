@@ -5,7 +5,6 @@
 #include "content/browser/ml/webnn/dml/execution_context.h"
 
 #include "content/browser/ml/webnn/dml/adapter_dml.h"
-#include "content/browser/ml/webnn/dml/unordered_resources.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
 
 namespace content::webnn {
@@ -97,15 +96,10 @@ HRESULT ExecutionContext::InitializeGraph(
 HRESULT ExecutionContext::ExecuteGraph(
     uint32_t graph_id,
     IDMLCompiledOperator* compiled_operator,
-    NamedInputsPtr namedInputs,
-    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
-    const std::vector<DML_BINDING_DESC>& output_bindings,
-    UINT64 commonInputsResourceSize,
-    ComPtr<ID3D12Resource> uploadResource,
-    ComPtr<ID3D12Resource> inputResource) {
-  return command_recorder_.ExecuteGraph(
-      graph_id, compiled_operator, std::move(namedInputs), inputs,
-      output_bindings, commonInputsResourceSize, uploadResource, inputResource);
+    const std::vector<DML_BINDING_DESC>& input_bindings,
+    const std::vector<DML_BINDING_DESC>& output_bindings) {
+  return command_recorder_.ExecuteGraph(graph_id, compiled_operator,
+                                        input_bindings, output_bindings);
 }
 
 ComPtr<ID3D12Device> ExecutionContext::GetD3D12Device() const {

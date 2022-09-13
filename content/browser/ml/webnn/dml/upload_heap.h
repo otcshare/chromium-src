@@ -15,6 +15,7 @@ namespace content::webnn {
 
 using Microsoft::WRL::ComPtr;
 using ml::webnn::mojom::ConstantsInfoPtr;
+using ml::webnn::mojom::NamedInputsPtr;
 class ExecutionContext;
 
 // A ring-buffer style upload heap for copying CPU data to GPU resources.
@@ -25,6 +26,8 @@ class UploadHeap final {
 
   HRESULT UploadConstants(ID3D12Resource* dst_resource,
                        ConstantsInfoPtr& constants_info);
+  HRESULT UploadInputs(ID3D12Resource* dst_resource,
+                       NamedInputsPtr& named_inputs);
 
  private:
   HRESULT CreateUploadResource(size_t byte_length);

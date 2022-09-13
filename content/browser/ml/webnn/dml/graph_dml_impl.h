@@ -20,6 +20,7 @@
 #include "components/ml/mojom/webnn_graph.mojom.h"
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "utils_dml.h"
+#include "content/browser/ml/webnn/dml/upload_heap.h"
 
 namespace content::webnn {
 
@@ -126,8 +127,9 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   BuildResult Finish();
   void AddOutput(const std::string&, uint32_t);
 
-  scoped_refptr<ExecutionContext> execution_context_;
   uint32_t graph_id_;
+  scoped_refptr<ExecutionContext> execution_context_;
+  std::unique_ptr<UploadHeap> input_resource_uploader_;
   // Represents a DirectML device, which is used to create operators, binding
   // tables, command recorders, and other objects.
   ComPtr<IDMLDevice> mDevice;
@@ -144,9 +146,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   ComPtr<ID3D12GraphicsCommandList> mCommandList;
 
   UINT64 mOutputsResourceSize = 0;
-  UINT64 mCommonInputsResourceSize = 0;
-  ComPtr<ID3D12Resource> mUploadResource = nullptr;
-  ComPtr<ID3D12Resource> mInputResource = nullptr;
   ComPtr<ID3D12Resource> mOutputResource = nullptr;
   ComPtr<ID3D12Resource> mReadBackResource = nullptr;
 #ifdef ENABLE_GPU_MEMORY_MANAGEMENT

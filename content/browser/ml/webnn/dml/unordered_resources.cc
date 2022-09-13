@@ -10,12 +10,6 @@
 
 namespace content::webnn {
 
-namespace {
-
-using ml::webnn::mojom::MemoryInfoPtr;
-
-}  // namespace
-
 UnorderedResources::UnorderedResources(ExecutionContext* execution_context)
     : execution_context_(execution_context) {}
 
@@ -89,7 +83,9 @@ ID3D12Resource* UnorderedResources::GetResource(UINT32 graph_id,
   auto iter = pool_.find(graph_id);
   DCHECK(iter != pool_.end());
   auto& resources = iter->second.resources;
-  DCHECK(resources.find(type) != resources.end());
+  if (resources.find(type) == resources.end()) {
+    return nullptr;
+  }
   return resources[type].Get();
 }
 

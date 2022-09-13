@@ -514,8 +514,10 @@ GraphDMLImpl::~GraphDMLImpl() = default;
 
 GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context,
                            uint32_t graph_id)
-    : execution_context_(execution_context),
-      graph_id_(graph_id),
+    : graph_id_(graph_id),
+      execution_context_(execution_context),
+      input_resource_uploader_(
+          std::make_unique<UploadHeap>(execution_context_.get())),
       fusion_operators_(std::make_unique<FusionOperators>()) {
   mCommandQueue = execution_context->GetCommandQueue();
   mCommandAllocator = execution_context->GetCommandAllocator();
@@ -1412,33 +1414,6 @@ void GraphDMLImpl::Build(
   CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
                         mD3D12Device);
 
-  for (auto& input : mInputs) {
-    if (!input->isConstantInput) {
-      uint64_t offset =
-          RoundUpToMultiple(mCommonInputsResourceSize,
-                            (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-      mCommonInputsResourceSize = offset + input->byteLength;
-    }
-  }
-  if (mCommonInputsResourceSize) {
-    D3D12_HEAP_PROPERTIES upload_heap_properties =
-        CreateHeapProperties(D3D12_HEAP_TYPE_UPLOAD);
-    D3D12_RESOURCE_DESC upload_resource_desc =
-        CreateResourceDesc(mCommonInputsResourceSize);
-    WEBNN_CHECK(mD3D12Device->CreateCommittedResource(
-        &upload_heap_properties, D3D12_HEAP_FLAG_NONE, &upload_resource_desc,
-        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
-        IID_PPV_ARGS(&mUploadResource)));
-
-    D3D12_HEAP_PROPERTIES input_heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC input_resource_desc = CreateResourceDesc(
-        mCommonInputsResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    WEBNN_CHECK(mD3D12Device->CreateCommittedResource(
-        &input_heap_properties, D3D12_HEAP_FLAG_NONE, &input_resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mInputResource)));
-  }
-
   for (size_t i = 0; i < mOutputs.size(); ++i) {
     uint64_t byteLength = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
                               mOutputs[i].outputTensorDESC.Desc)
@@ -1454,11 +1429,6 @@ void GraphDMLImpl::Build(
   }
   outputs_shm_region_ =
       base::ReadOnlySharedMemoryRegion::Create(mOutputsResourceSize);
-  // for (auto& output : mOutputs) {
-  //   MemoryInfo memory_info = outputs_info_map_[output.name];
-  //   outputs_shm_mapping_[output.name] = outputs_shm_region_.MapAt(
-  //       memory_info.byte_offset, memory_info.byte_length);
-  // }
 
   if (mOutputsResourceSize) {
     D3D12_HEAP_PROPERTIES output_heap_properties = CreateHeapProperties();
@@ -1483,9 +1453,36 @@ void GraphDMLImpl::Build(
 
 void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
                            ComputeCallback callback) {
-  auto named_outputs = ml::webnn::mojom::NamedOutputs::New();
+  UnorderedResources* unordered_resources =
+      execution_context_->GetUnorderedResources();
+  ID3D12Resource* inputs_resource =
+      unordered_resources->GetResource(graph_id_, ResourceType::kInput);
+  if (inputs_resource == nullptr) {
+    base::ReadOnlySharedMemoryRegion& shared_memory_region =
+        named_inputs->shared_memory;
+    DCHECK(shared_memory_region.IsValid());
+    size_t inputs_byte_length = shared_memory_region.GetSize();
+    inputs_resource = unordered_resources->Allocate(
+        ResourceType::kInput, inputs_byte_length, graph_id_);
+  }
+  input_resource_uploader_->UploadInputs(inputs_resource, named_inputs);
+  std::vector<DML_BUFFER_BINDING> input_buffer_binding(mInputs.size());
+  std::vector<DML_BINDING_DESC> input_binding_desc(mInputs.size());
+  for (size_t i = 0; i < mInputs.size(); ++i) {
+    auto input = mInputs[i];
+    if (!input->isConstantInput) {
+      input_buffer_binding[i].Buffer = inputs_resource;
+      auto& memory_info = named_inputs->inputs[input->name];
+      input_buffer_binding[i].Offset = memory_info->byte_offset;
+      input_buffer_binding[i].SizeInBytes = memory_info->byte_length;
 
-  std::vector<DML_BINDING_DESC> outputBindingDesc(mOutputs.size());
+      input_binding_desc[i] = {DML_BINDING_TYPE_BUFFER,
+                               &input_buffer_binding[i]};
+    }
+  }
+
+  auto named_outputs = ml::webnn::mojom::NamedOutputs::New();
+  std::vector<DML_BINDING_DESC> output_binding_desc(mOutputs.size());
   // The sort of the outputs from Graph Compute is different from the
   // outputs from Graph Build, so the offset need to be found the corrent output
   // with name to read back from GPU buffer.
@@ -1503,15 +1500,13 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
     buffer_binding.SizeInBytes = byteLength;
     std::string name = mOutputs[i].name;
     output_buffer_binding[name] = buffer_binding;
-    outputBindingDesc[i] = {DML_BINDING_TYPE_BUFFER,
-                            &output_buffer_binding[name]};
+    output_binding_desc[i] = {DML_BINDING_TYPE_BUFFER,
+                              &output_buffer_binding[name]};
     outputOffset = outputOffset + byteLength;
   }
 
   execution_context_->ExecuteGraph(graph_id_, mCompiledOperator.Get(),
-                                   std::move(named_inputs), mInputs,
-                                   outputBindingDesc, mCommonInputsResourceSize,
-                                   mUploadResource, mInputResource);
+                                   input_binding_desc, output_binding_desc);
 
   // Copy buffer from outputResource to readBackResource.
   CopyBufferRegionUtil(mCommandList, mOutputResource, mReadBackResource,
