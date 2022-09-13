@@ -23,17 +23,18 @@ class UploadHeap final {
   explicit UploadHeap(ExecutionContext* execution_context);
   ~UploadHeap();
 
-  ID3D12Resource* UploadResourceWithRingBuffer(
-    ConstantsInfoPtr& constants_info);
+  HRESULT UploadConstants(ID3D12Resource* dst_resource,
+                       ConstantsInfoPtr& constants_info);
 
  private:
-  ComPtr<ID3D12Resource> CreateRingBuffer(size_t src_byte_length);
-  static constexpr uint64_t kRingBufferSize = 4 * 1024 * 1024;
+  HRESULT CreateUploadResource(size_t byte_length);
 
   ExecutionContext* execution_context_;
-  ComPtr<ID3D12Resource> ring_buffers_;
-  // TODO::
-  ComPtr<ID3D12Resource> constants_resource_;
+#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
+  // GMM will re-use resource memory using FIFO for upload handle.
+#else
+  ComPtr<ID3D12Resource> upload_resource_;
+#endif
 };
 
 }  // namespace content::webnn

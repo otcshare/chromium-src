@@ -5,15 +5,14 @@
 #include "content/browser/ml/webnn/dml/execution_context.h"
 
 #include "content/browser/ml/webnn/dml/adapter_dml.h"
-#include "content/browser/ml/webnn/dml/resource_allocation.h"
-#include "content/browser/ml/webnn/dml/resource_allocator_manager.h"
+#include "content/browser/ml/webnn/dml/unordered_resources.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
 
 namespace content::webnn {
 
 ExecutionContext::ExecutionContext(scoped_refptr<AdapterDML> adapter)
     : d3d12_device_(adapter->GetD3D12Device()),
-      // command_queue_(adapter->GetCommandQueue()),
+      command_queue_(adapter->GetCommandQueue()),
       command_recorder_(adapter->GetDMLDevice()) {}
 
 ExecutionContext::~ExecutionContext() = default;
@@ -53,7 +52,7 @@ void ExecutionContext::CopyBufferRegion(ID3D12Resource* dest_resource,
       D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
   command_recorder_.ResourceBarrier({resourceBarrier});
   command_recorder_.CopyBufferRegion(dest_resource, 0, src_resource, 0,
-                                      resource_size);
+                                     resource_size);
   // if (needBarrierEnd) {
   // Reset the destination state of COPY_DEST to UNORDERED_ACCESS when uploading
   // data from CPU to GPU, the source state of COPY_SOURCE to UNORDERED_ACCESS
@@ -65,34 +64,38 @@ void ExecutionContext::CopyBufferRegion(ID3D12Resource* dest_resource,
 }
 
 HRESULT ExecutionContext::Initialize() {
-  D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
-  command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
-  command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
-  HRESULT hr = d3d12_device_->CreateCommandQueue(&command_queue_desc,
-                                                 IID_PPV_ARGS(&command_queue_));
-  if (FAILED(hr)) {
-    return hr;
-  }
+  // D3D12_COMMAND_QUEUE_DESC command_queue_desc = {};
+  // command_queue_desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
+  // command_queue_desc.Flags = D3D12_COMMAND_QUEUE_FLAG_NONE;
+  // HRESULT hr = d3d12_device_->CreateCommandQueue(&command_queue_desc,
+  //                                                IID_PPV_ARGS(&command_queue_));
+  // if (FAILED(hr)) {
+  //   return hr;
+  // }
 
-  hr = command_recorder_.Initialize();
+  HRESULT hr = command_recorder_.Initialize();
   if (FAILED(hr)) {
     return hr;
   }
   // resource_allocator_manager_ =
   //     std::make_unique<ResourceAllocatorManager>(this);
 
-  upload_heap_ = std::make_unique<UploadHeap>(this);
+  unordered_resources_ = std::make_unique<UnorderedResources>(this);
+  command_recorder_.SetUnorderedResources(unordered_resources_.get());
+
   return S_OK;
 }
 
-HRESULT ExecutionContext::InitializeOperator(
+HRESULT ExecutionContext::InitializeGraph(
+    uint32_t graph_id,
     IDMLCompiledOperator* compiled_operator,
-    const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
     const DML_BINDING_DESC& input_array_binding) {
-  return command_recorder_.InitializeOperator(compiled_operator, inputs, input_array_binding);
+  return command_recorder_.InitializeGraph(graph_id, compiled_operator,
+                                           input_array_binding);
 }
 
-HRESULT ExecutionContext::ExecuteOperator(
+HRESULT ExecutionContext::ExecuteGraph(
+    uint32_t graph_id,
     IDMLCompiledOperator* compiled_operator,
     NamedInputsPtr namedInputs,
     const std::vector<std::shared_ptr<InputEdgeInfo>>& inputs,
@@ -100,9 +103,9 @@ HRESULT ExecutionContext::ExecuteOperator(
     UINT64 commonInputsResourceSize,
     ComPtr<ID3D12Resource> uploadResource,
     ComPtr<ID3D12Resource> inputResource) {
-  return command_recorder_.ExecuteOperator(
-      compiled_operator, std::move(namedInputs), inputs, output_bindings,
-      commonInputsResourceSize, uploadResource, inputResource);
+  return command_recorder_.ExecuteGraph(
+      graph_id, compiled_operator, std::move(namedInputs), inputs,
+      output_bindings, commonInputsResourceSize, uploadResource, inputResource);
 }
 
 ComPtr<ID3D12Device> ExecutionContext::GetD3D12Device() const {
@@ -113,8 +116,8 @@ ComPtr<ID3D12CommandQueue> ExecutionContext::GetCommandQueue() const {
   return command_queue_;
 }
 
-UploadHeap* ExecutionContext::GetUploadHeap() {
-  return upload_heap_.get();
+UnorderedResources* ExecutionContext::GetUnorderedResources() {
+  return unordered_resources_.get();
 }
 
 // ResourceAllocation ExecutionContext::AllocateMemory(

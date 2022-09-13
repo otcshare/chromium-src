@@ -31,7 +31,7 @@ void ContextDMLImpl::CreateGraph(uint32_t graph_id,
   mojo::PendingRemote<ml::webnn::mojom::Graph> blink_remote;
   // The receiver bind to GraphDMLImpl.
   GraphDMLImpl::Create(blink_remote.InitWithNewPipeAndPassReceiver(),
-                       execution_context_);
+                       execution_context_, graph_id);
   std::move(callback).Run(std::move(blink_remote));
 }
 

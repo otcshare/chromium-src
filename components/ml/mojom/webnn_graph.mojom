@@ -289,7 +289,7 @@ interface Graph {
   // Compile the `MLGraphBuild` state up to the specified output operands into
   // a compiled graph according to the type of `MLContext` that creates it.
   // `result` is the status of building graph.
-  Build@11(map<string, uint32> named_operands, ConstantsInfo constant_info)
+  Build@11(map<string, uint32> named_operands, ConstantsInfo? constant_info)
       => (BuildResult result);
 
   // Carries out the computational workload of a compiled graph.

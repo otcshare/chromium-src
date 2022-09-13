@@ -35,7 +35,7 @@ class AdapterDML final : public base::RefCounted<AdapterDML> {
   AdapterType GetAdapterType();
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<IDMLDevice> GetDMLDevice() const;
-  // ComPtr<ID3D12CommandQueue> GetCommandQueue() const;
+  ComPtr<ID3D12CommandQueue> GetCommandQueue() const;
 
  private:
   friend class base::RefCounted<AdapterDML>;
@@ -44,7 +44,7 @@ class AdapterDML final : public base::RefCounted<AdapterDML> {
   ComPtr<IDXGIAdapter3> hardware_adapter_;
   AdapterType adapter_type_ = AdapterType::kUnknow;
   ComPtr<ID3D12Device> d3d12_device_;
-  // ComPtr<ID3D12CommandQueue> command_queue_;
+  ComPtr<ID3D12CommandQueue> command_queue_;
   // Represents a DirectML device, which is used to create operators, binding
   // tables, command recorders.
   ComPtr<IDMLDevice> dml_device_;

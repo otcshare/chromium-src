@@ -502,9 +502,11 @@ void MojoGraph::OnGraphCreated(
     named_operands.insert(name, output->GetObjectId());
     // remote_graph_->AddOutput(name, output->GetObjectId());
   }
-  remote_graph_->Build(std::move(named_operands), std::move(constants_info),
-                       WTF::Bind(&MojoGraph::OnGraphBuilt, WrapPersistent(this),
-                                 WrapPersistent(resolver)));
+  remote_graph_->Build(
+      std::move(named_operands),
+      request->constants_.size() != 0 ? std::move(constants_info) : nullptr,
+      WTF::Bind(&MojoGraph::OnGraphBuilt, WrapPersistent(this),
+                WrapPersistent(resolver)));
   return;
 }
 
