@@ -4,7 +4,7 @@
 
 #include "content/browser/ml/webnn/dml/command_recorder.h"
 
-#include "content/browser/ml/webnn/dml/unordered_resources.h"
+#include "content/browser/ml/webnn/dml/execution_resources.h"
 
 namespace content::webnn {
 
@@ -201,7 +201,7 @@ HRESULT CommandRecorder::ExecuteGraph(
   return S_OK;
 }
 
-void CommandRecorder::SetUnorderedResources(UnorderedResources* resources) {
+void CommandRecorder::SetExecutionResources(ExecutionResources* resources) {
   unordered_resources_ = resources;
 }
 

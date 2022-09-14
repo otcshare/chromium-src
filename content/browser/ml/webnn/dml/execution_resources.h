@@ -2,8 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef CONTENT_BROWSER_ML_WEBNN_UNORDERED_RESOURCES_H_
-#define CONTENT_BROWSER_ML_WEBNN_UNORDERED_RESOURCES_H_
+#ifndef CONTENT_BROWSER_ML_WEBNN_EXECUTION_RESOURCES_H_
+#define CONTENT_BROWSER_ML_WEBNN_EXECUTION_RESOURCES_H_
 
 #include <wrl.h>
 #include <map>
@@ -26,10 +26,10 @@ enum class ResourceType {
 
 // A unordered resources represent input, output, temporary and persistent
 // resource.
-class UnorderedResources final {
+class ExecutionResources final {
  public:
-  explicit UnorderedResources(ExecutionContext* execution_context);
-  ~UnorderedResources();
+  explicit ExecutionResources(ExecutionContext* execution_context);
+  ~ExecutionResources();
 
   // Allocate a resource that is released by manually.
   ComPtr<ID3D12Resource> Allocate(UINT64 resource_size);
@@ -56,4 +56,4 @@ class UnorderedResources final {
 
 }  // namespace content::webnn
 
-#endif  // CONTENT_BROWSER_ML_WEBNN_UNORDERED_RESOURCES_H_
+#endif  // CONTENT_BROWSER_ML_WEBNN_EXECUTION_RESOURCES_H_

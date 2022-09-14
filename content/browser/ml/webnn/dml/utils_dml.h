@@ -28,15 +28,13 @@ namespace content::webnn {
 using namespace Microsoft::WRL;
 using ml::webnn::mojom::AutoPad;
 
-
-
 // TODO
 inline void CopyBufferRegionUtil(ComPtr<ID3D12GraphicsCommandList> commandList,
-                             ComPtr<ID3D12Resource> srcResource,
-                             ComPtr<ID3D12Resource> destResource,
-                             UINT64 resourceSize,
-                             D3D12_RESOURCE_STATES state,
-                             bool needBarrierEnd = true) {
+                                 ComPtr<ID3D12Resource> srcResource,
+                                 ComPtr<ID3D12Resource> destResource,
+                                 UINT64 resourceSize,
+                                 D3D12_RESOURCE_STATES state,
+                                 bool needBarrierEnd = true) {
   D3D12_RESOURCE_BARRIER resourceBarrier;
   if (state == D3D12_RESOURCE_STATE_COPY_DEST) {
     resourceBarrier.Transition.pResource = destResource.Get();
@@ -85,16 +83,31 @@ inline D3D12_RESOURCE_DESC CreateResourceDesc(
           flags};
 };
 
-template <typename T>
-T RoundUpToMultiple(T value, T multiple) {
-  static_assert(std::is_integral_v<T>);
-
-  T remainder = value % multiple;
+// Round up to alignment
+inline size_t Align(size_t value, UINT alignment) {
+  size_t remainder = value % alignment;
   if (remainder != 0) {
-    value += multiple - remainder;
+    value += alignment - remainder;
   }
 
   return value;
+}
+
+template <typename T>
+std::pair<size_t, T> Align(T& memory_info_map, UINT alignment) {
+  T aligned_memory_info_map;
+  size_t aligned_offset = 0;
+  for (auto& [key, memory_info] : memory_info_map) {
+    uint64_t aligned_byte_length =
+        Align(memory_info->byte_length, alignment);
+    auto aligned_memory_info = ml::webnn::mojom::MemoryInfo::New();
+    aligned_memory_info->byte_offset = aligned_offset;
+    aligned_memory_info->byte_length = aligned_byte_length;
+    aligned_memory_info_map[key] = std::move(aligned_memory_info);
+    aligned_offset += aligned_byte_length;
+  }
+
+  return std::make_pair(aligned_offset, std::move(aligned_memory_info_map));
 }
 
 // Represent the information of the graph's edges.

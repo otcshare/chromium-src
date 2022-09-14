@@ -41,6 +41,20 @@ using ml::webnn::mojom::blink::Pool2dType;
 using ml::webnn::mojom::blink::RoundingType;
 using ml::webnn::mojom::blink::UnaryOperandType;
 
+#if BUILDFLAG(IS_WIN)
+static const uint32_t kBufferAlignment = 16;
+#else
+static const uint32_t kBufferAlignment = 1;
+#endif
+base::CheckedNumeric<size_t> Align(size_t value, uint32_t aligment) {
+  size_t remainder = value % aligment;
+  if (remainder != 0) {
+    value += aligment - remainder;
+  }
+
+  return value;
+}
+
 OperandType BlinkOperandTypeToMojo(V8MLOperandType::Enum type) {
   switch (type) {
     case V8MLOperandType::Enum::kFloat32:
@@ -375,7 +389,7 @@ ScriptPromise MojoGraph::ComputeImpl(ScriptState* script_state,
     uint8_t* address = inputs_shm_region_.mapping.GetMemoryAs<uint8_t>() +
                        memory_info->byte_offset;
     memcpy(address, array_buffer_view->BaseAddressMaybeShared(),
-           base::checked_cast<size_t>(memory_info->byte_length));
+           array_buffer_view->byteLength());
     named_inputs->inputs.insert(input_name, std::move(memory_info));
   }
   named_inputs->shared_memory = inputs_shm_region_.region.Duplicate();
@@ -424,6 +438,7 @@ void MojoGraph::OnGraphCreated(
               input->Name()));
       return;
     }
+    input_byte_length = Align(input_byte_length, kBufferAlignment).ValueOrDie();
     auto desc = ml::webnn::mojom::blink::OperandDescriptor::New();
     desc->data_type = BlinkOperandTypeToMojo(input->Type());
     desc->dimensions = input->Dimensions();
@@ -442,7 +457,7 @@ void MojoGraph::OnGraphCreated(
   for (const auto& constant : request->constants_) {
     wtf_size_t size = base::checked_cast<wtf_size_t>(
         constant->ArrayBufferView()->byteLength());
-    constants_buffer_length += size;
+    constants_buffer_length += Align(size, kBufferAlignment);
   }
   base::MappedReadOnlyRegion constants_shm_region =
       base::ReadOnlySharedMemoryRegion::Create(
@@ -456,7 +471,8 @@ void MojoGraph::OnGraphCreated(
     desc->object_id = constant->GetObjectId();
 
     auto* array_buffer_view = constant->ArrayBufferView();
-    size_t size = array_buffer_view->byteLength();
+    size_t size =
+        Align(array_buffer_view->byteLength(), kBufferAlignment).ValueOrDie();
     remote_graph_->AddConstant(std::move(desc));
 
     auto memory_info = ml::webnn::mojom::blink::MemoryInfo::New();
@@ -467,7 +483,7 @@ void MojoGraph::OnGraphCreated(
     uint8_t* address = constants_shm_region.mapping.GetMemoryAs<uint8_t>() +
                        memory_info->byte_offset;
     memcpy(address, array_buffer_view->BaseAddressMaybeShared(),
-           base::checked_cast<size_t>(memory_info->byte_length));
+           array_buffer_view->byteLength());
     constants_info->constants.insert(constant->GetObjectId(),
                                      std::move(memory_info));
   }
@@ -504,7 +520,7 @@ void MojoGraph::OnGraphCreated(
   }
   remote_graph_->Build(
       std::move(named_operands),
-      request->constants_.size() != 0 ? std::move(constants_info) : nullptr,
+      request->constants_.size() == 0 ? nullptr : std::move(constants_info),
       WTF::Bind(&MojoGraph::OnGraphBuilt, WrapPersistent(this),
                 WrapPersistent(resolver)));
   return;

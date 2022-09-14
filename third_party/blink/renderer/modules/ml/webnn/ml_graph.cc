@@ -52,7 +52,9 @@ DOMArrayBufferView* MLGraph::ValidateInputBuffer(const MLNamedInput& input,
     array_buffer_view = ml_tensor->data().Get();
   }
   DCHECK(array_buffer_view != nullptr);
-  if (array_buffer_view->byteLength() < iter->value) {
+  // TODO::The resources mush be aligned 16 byte on DirectML backend on Windows,
+  // so the array_buffer_view->byteLength() will < iter->value
+  if (array_buffer_view->byteLength() > iter->value) {
     error_message = "Wrong size of input: " + input.first;
     return nullptr;
   }

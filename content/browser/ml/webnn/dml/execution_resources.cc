@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "content/browser/ml/webnn/dml/unordered_resources.h"
+#include "content/browser/ml/webnn/dml/execution_resources.h"
 
 #include <memory>
 
@@ -10,12 +10,12 @@
 
 namespace content::webnn {
 
-UnorderedResources::UnorderedResources(ExecutionContext* execution_context)
+ExecutionResources::ExecutionResources(ExecutionContext* execution_context)
     : execution_context_(execution_context) {}
 
-UnorderedResources::~UnorderedResources() = default;
+ExecutionResources::~ExecutionResources() = default;
 
-ComPtr<ID3D12Resource> UnorderedResources::Allocate(UINT64 resource_size) {
+ComPtr<ID3D12Resource> ExecutionResources::Allocate(UINT64 resource_size) {
 #ifdef ENABLE_GPU_MEMORY_MANAGEMENT
   // Allocate gpu resource with ResourceAllocator and manage it with Residency
   // management
@@ -64,7 +64,7 @@ ComPtr<ID3D12Resource> UnorderedResources::Allocate(UINT64 resource_size) {
   return resource;
 }
 
-ID3D12Resource* UnorderedResources::Allocate(ResourceType type,
+ID3D12Resource* ExecutionResources::Allocate(ResourceType type,
                                              UINT64 resource_size,
                                              UINT32 graph_id) {
   DCHECK_GT(graph_id, (uint32_t)(0));
@@ -78,10 +78,13 @@ ID3D12Resource* UnorderedResources::Allocate(ResourceType type,
   return resource.Get();
 }
 
-ID3D12Resource* UnorderedResources::GetResource(UINT32 graph_id,
+ID3D12Resource* ExecutionResources::GetResource(UINT32 graph_id,
                                                 ResourceType type) {
   auto iter = pool_.find(graph_id);
-  DCHECK(iter != pool_.end());
+  if (iter == pool_.end()) {
+    return nullptr;
+  }
+
   auto& resources = iter->second.resources;
   if (resources.find(type) == resources.end()) {
     return nullptr;
@@ -89,18 +92,18 @@ ID3D12Resource* UnorderedResources::GetResource(UINT32 graph_id,
   return resources[type].Get();
 }
 
-void UnorderedResources::Free(UINT32 graph_id) {
+void ExecutionResources::Free(UINT32 graph_id) {
   auto iter = pool_.find(graph_id);
   if (iter != pool_.end()) {
     pool_.erase(iter);
   }
 }
 
-UnorderedResources::Resources::Resources() = default;
-UnorderedResources::Resources::Resources(ResourceType type,
+ExecutionResources::Resources::Resources() = default;
+ExecutionResources::Resources::Resources(ResourceType type,
                                          ComPtr<ID3D12Resource> resource) {
   resources[type] = resource;
 }
-UnorderedResources::Resources::~Resources() = default;
+ExecutionResources::Resources::~Resources() = default;
 
 }  // namespace content::webnn

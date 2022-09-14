@@ -8,7 +8,7 @@
 #include "base/memory/ptr_util.h"
 #include "content/browser/ml/webnn/dml/execution_context.h"
 #include "content/browser/ml/webnn/dml/graph_dml_impl.h"
-#include "content/browser/ml/webnn/dml/unordered_resources.h"
+#include "content/browser/ml/webnn/dml/execution_resources.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
 #include "content/browser/ml/webnn/fusion_operators.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -1386,9 +1386,9 @@ void GraphDMLImpl::Build(
     base::ReadOnlySharedMemoryRegion& shared_memory_region =
         constants_info->shared_memory;
     size_t constants_byte_length = shared_memory_region.GetSize();
-    UnorderedResources* unordered_resources =
-        execution_context_->GetUnorderedResources();
-    constants_resource = unordered_resources->Allocate(constants_byte_length);
+    ExecutionResources* execution_resources =
+        execution_context_->GetExecutionResources();
+    constants_resource = execution_resources->Allocate(constants_byte_length);
     uploader->UploadConstants(constants_resource.Get(), constants_info);
   }
   std::vector<DML_BUFFER_BINDING> input_buffer_binding(mInputs.size());
@@ -1418,8 +1418,8 @@ void GraphDMLImpl::Build(
     uint64_t byteLength = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
                               mOutputs[i].outputTensorDESC.Desc)
                               ->TotalTensorSizeInBytes;
-    uint64_t offset = RoundUpToMultiple(
-        mOutputsResourceSize, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+    uint64_t offset =
+        Align(mOutputsResourceSize, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
     MemoryInfo memory_info = {};
     memory_info.byte_offset = offset;
     memory_info.byte_length = byteLength;
@@ -1453,16 +1453,16 @@ void GraphDMLImpl::Build(
 
 void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
                            ComputeCallback callback) {
-  UnorderedResources* unordered_resources =
-      execution_context_->GetUnorderedResources();
+  ExecutionResources* execution_resources =
+      execution_context_->GetExecutionResources();
   ID3D12Resource* inputs_resource =
-      unordered_resources->GetResource(graph_id_, ResourceType::kInput);
+      execution_resources->GetResource(graph_id_, ResourceType::kInput);
   if (inputs_resource == nullptr) {
     base::ReadOnlySharedMemoryRegion& shared_memory_region =
         named_inputs->shared_memory;
     DCHECK(shared_memory_region.IsValid());
     size_t inputs_byte_length = shared_memory_region.GetSize();
-    inputs_resource = unordered_resources->Allocate(
+    inputs_resource = execution_resources->Allocate(
         ResourceType::kInput, inputs_byte_length, graph_id_);
   }
   input_resource_uploader_->UploadInputs(inputs_resource, named_inputs);
@@ -1492,8 +1492,7 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
     size_t byteLength = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
                             mOutputs[i].outputTensorDESC.Desc)
                             ->TotalTensorSizeInBytes;
-    outputOffset = RoundUpToMultiple(
-        outputOffset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+    outputOffset = Align(outputOffset, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
     DML_BUFFER_BINDING buffer_binding;
     buffer_binding.Buffer = mOutputResource.Get();
     buffer_binding.Offset = outputOffset;
