@@ -79,8 +79,8 @@ HRESULT ExecutionContext::Initialize() {
   // resource_allocator_manager_ =
   //     std::make_unique<ResourceAllocatorManager>(this);
 
-  unordered_resources_ = std::make_unique<UnorderedResources>(this);
-  command_recorder_.SetUnorderedResources(unordered_resources_.get());
+  unordered_resources_ = std::make_unique<ExecutionResources>(this);
+  command_recorder_.SetExecutionResources(unordered_resources_.get());
 
   return S_OK;
 }
@@ -110,7 +110,7 @@ ComPtr<ID3D12CommandQueue> ExecutionContext::GetCommandQueue() const {
   return command_queue_;
 }
 
-UnorderedResources* ExecutionContext::GetUnorderedResources() {
+ExecutionResources* ExecutionContext::GetExecutionResources() {
   return unordered_resources_.get();
 }
 

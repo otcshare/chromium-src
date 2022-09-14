@@ -11,7 +11,7 @@
 
 #include "base/memory/ref_counted.h"
 #include "content/browser/ml/webnn/dml/command_recorder.h"
-#include "content/browser/ml/webnn/dml/unordered_resources.h"
+#include "content/browser/ml/webnn/dml/execution_resources.h"
 
 namespace content::webnn {
 
@@ -47,7 +47,7 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
 
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<ID3D12CommandQueue> GetCommandQueue() const;
-  UnorderedResources* GetUnorderedResources();
+  ExecutionResources* GetExecutionResources();
 
   // ResourceAllocation AllocateMemory(
   //     D3D12_HEAP_TYPE heap_type,
@@ -71,7 +71,7 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
   // There is one active command recorder at a time.
   CommandRecorder command_recorder_;
 
-  std::unique_ptr<UnorderedResources> unordered_resources_;
+  std::unique_ptr<ExecutionResources> unordered_resources_;
   // std::unique_ptr<ResourceAllocatorManager> resource_allocator_manager_;
 };
 

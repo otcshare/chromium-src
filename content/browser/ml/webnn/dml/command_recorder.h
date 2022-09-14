@@ -17,7 +17,7 @@ namespace content::webnn {
 using Microsoft::WRL::ComPtr;
 using ml::webnn::mojom::NamedInputsPtr;
 
-class UnorderedResources;
+class ExecutionResources;
 
 class CommandRecorder final {
  public:
@@ -47,7 +47,7 @@ class CommandRecorder final {
       const std::vector<DML_BINDING_DESC>& input_bindings,
       const std::vector<DML_BINDING_DESC>& output_bindings);
 
-  void SetUnorderedResources(UnorderedResources* resources);
+  void SetExecutionResources(ExecutionResources* resources);
 
   // TODO:
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
@@ -63,7 +63,7 @@ class CommandRecorder final {
   ComPtr<IDMLOperatorInitializer> operator_initializer_;
   ComPtr<IDMLCommandRecorder> command_recorder_;
 
-  UnorderedResources* unordered_resources_;
+  ExecutionResources* unordered_resources_;
 
   ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
   DML_BINDING_TABLE_DESC mBindingTableDesc;

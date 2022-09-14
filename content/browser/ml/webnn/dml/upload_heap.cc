@@ -29,21 +29,19 @@ HRESULT UploadResource(ExecutionContext* execution_context,
   }
 
   for (auto& [_, memory_info] : named_inputs) {
-    // offset = RoundUpToMultiple(
-    //     offset, (uint64_t)DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+    uint64_t byte_length = memory_info->byte_length;
+    DCHECK(byte_length % DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT == 0);
     DCHECK(shared_memory_region.IsValid());
     base::ReadOnlySharedMemoryMapping shared_memory_mapping =
-        shared_memory_region.MapAt(memory_info->byte_offset,
-                                   memory_info->byte_length);
+        shared_memory_region.MapAt(memory_info->byte_offset, byte_length);
     memcpy(static_cast<byte*>(upload_heap_data) + memory_info->byte_offset,
-           shared_memory_mapping.GetMemoryAs<uint8_t>(),
-           memory_info->byte_length);
+           shared_memory_mapping.GetMemoryAs<uint8_t>(), byte_length);
   }
   src_resource->Unmap(0, nullptr);
 
-  size_t byte_length = shared_memory_region.GetSize();
   // Copy from the upload heap into the destination resource
-  execution_context->CopyBufferRegion(dst_resource, src_resource, byte_length,
+  execution_context->CopyBufferRegion(dst_resource, src_resource,
+                                      shared_memory_region.GetSize(),
                                       D3D12_RESOURCE_STATE_COPY_DEST);
 
   return S_OK;
