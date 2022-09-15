@@ -16,6 +16,7 @@
 #define CONTENT_BROWSER_ML_WEBNN_DML_DMLUTILS_H_
 
 #include "base/logging.h"
+#include "components/ml/mojom/webnn_graph.mojom.h"
 
 #define WEBNN_CHECK(hr)                   \
   if (((HRESULT)(hr)) < 0) {              \
@@ -27,6 +28,24 @@ namespace content::webnn {
 
 using namespace Microsoft::WRL;
 using ml::webnn::mojom::AutoPad;
+
+#define ENABLE_GPU_MEMORY_MANAGEMENT
+
+#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
+// Allocate gpu resource with ResourceAllocator and manage it with Residency
+// management
+#define RESOURCE_PTR ComPtr<gpgmm::d3d12::ResourceAllocation>
+#else
+#define RESOURCE_PTR ComPtr<ID3D12Resource>
+#endif
+
+inline ID3D12Resource* GetD3D12Resource(RESOURCE_PTR resource_ptr) {
+#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
+  return resource_ptr->GetResource();
+#else
+  return resource_ptr.Get();
+#endif
+}
 
 // Round up to alignment
 inline size_t Align(size_t value, UINT alignment) {
@@ -54,7 +73,8 @@ std::pair<size_t, T> Align(T& memory_info_map, UINT alignment) {
   return std::make_pair(aligned_offset, std::move(aligned_memory_info_map));
 }
 
-inline std::vector<UINT> ConvertDimensions(const std::vector<int32_t>& dimensions) {
+inline std::vector<UINT> ConvertDimensions(
+    const std::vector<int32_t>& dimensions) {
   std::vector<UINT> convertedDimensions;
   for (auto dim : dimensions) {
     if (dim < 0) {

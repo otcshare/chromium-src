@@ -10,6 +10,7 @@
 
 #include "DirectML.h"
 #include "components/ml/mojom/webnn_graph.mojom.h"
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
 #include "content/browser/ml/webnn/dml/utils_dml.h"
 
 namespace content::webnn {
@@ -17,11 +18,13 @@ namespace content::webnn {
 using Microsoft::WRL::ComPtr;
 using ml::webnn::mojom::NamedInputsPtr;
 
+class AdapterDML;
 class ExecutionResources;
 
 class CommandRecorder final {
  public:
-  explicit CommandRecorder(ComPtr<IDMLDevice> dml_device,
+  explicit CommandRecorder(scoped_refptr<AdapterDML> adpter,
+                           ComPtr<IDMLDevice> dml_device,
                            ComPtr<ID3D12CommandQueue> command_queue);
   ~CommandRecorder();
 
@@ -55,8 +58,10 @@ class CommandRecorder final {
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
   ComPtr<ID3D12GraphicsCommandList> GetCommandList();
   ComPtr<IDMLDevice> GetDMLDevice();
+  ComPtr<gpgmm::d3d12::ResourceAllocator> GetResourceAllocator();
 
  private:
+  scoped_refptr<AdapterDML> adapter_;
   ComPtr<IDMLDevice> dml_device_;
   ComPtr<ID3D12Device> d3d12_device_;
   ComPtr<ID3D12CommandAllocator> command_allocator_;
@@ -68,6 +73,7 @@ class CommandRecorder final {
 
   ExecutionResources* unordered_resources_;
 
+  ComPtr<gpgmm::d3d12::ResourceAllocator> resource_allocator_;
   ComPtr<ID3D12DescriptorHeap> mDescriptorHeap;
   DML_BINDING_TABLE_DESC mBindingTableDesc;
   ComPtr<IDMLBindingTable> mBindingTable;
