@@ -35,6 +35,8 @@ source_set("lib") {
     "dml/graph_dml_impl.h",
     "dml/mojo_server_dml_impl.cc",
     "dml/mojo_server_dml_impl.h",
+    "dml/readback_heap.cc",
+    "dml/readback_heap.h",
     "dml/upload_heap.cc",
     "dml/upload_heap.h",
     "dml/utils_dml.h",

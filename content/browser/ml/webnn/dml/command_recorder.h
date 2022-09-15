@@ -21,7 +21,8 @@ class ExecutionResources;
 
 class CommandRecorder final {
  public:
-  explicit CommandRecorder(ComPtr<IDMLDevice> dml_device);
+  explicit CommandRecorder(ComPtr<IDMLDevice> dml_device,
+                           ComPtr<ID3D12CommandQueue> command_queue);
   ~CommandRecorder();
 
   CommandRecorder(const CommandRecorder&) = delete;
@@ -41,11 +42,12 @@ class CommandRecorder final {
                           IDMLCompiledOperator* compiled_operator,
                           const DML_BINDING_DESC& input_array_binding);
 
-  HRESULT ExecuteGraph(
-      uint32_t graph_id,
-      IDMLCompiledOperator* compiled_operator,
-      const std::vector<DML_BINDING_DESC>& input_bindings,
-      const std::vector<DML_BINDING_DESC>& output_bindings);
+  HRESULT ExecuteGraph(uint32_t graph_id,
+                       IDMLCompiledOperator* compiled_operator,
+                       const std::vector<DML_BINDING_DESC>& input_bindings,
+                       const std::vector<DML_BINDING_DESC>& output_bindings);
+
+  void CloseAndExecute();
 
   void SetExecutionResources(ExecutionResources* resources);
 
@@ -59,6 +61,7 @@ class CommandRecorder final {
   ComPtr<ID3D12Device> d3d12_device_;
   ComPtr<ID3D12CommandAllocator> command_allocator_;
   ComPtr<ID3D12GraphicsCommandList> command_list_;
+  ComPtr<ID3D12CommandQueue> command_queue_;
 
   ComPtr<IDMLOperatorInitializer> operator_initializer_;
   ComPtr<IDMLCommandRecorder> command_recorder_;

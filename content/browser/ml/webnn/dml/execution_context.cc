@@ -12,7 +12,7 @@ namespace content::webnn {
 ExecutionContext::ExecutionContext(scoped_refptr<AdapterDML> adapter)
     : d3d12_device_(adapter->GetD3D12Device()),
       command_queue_(adapter->GetCommandQueue()),
-      command_recorder_(adapter->GetDMLDevice()) {}
+      command_recorder_(adapter->GetDMLDevice(), command_queue_) {}
 
 ExecutionContext::~ExecutionContext() = default;
 
@@ -100,6 +100,10 @@ HRESULT ExecutionContext::ExecuteGraph(
     const std::vector<DML_BINDING_DESC>& output_bindings) {
   return command_recorder_.ExecuteGraph(graph_id, compiled_operator,
                                         input_bindings, output_bindings);
+}
+
+void ExecutionContext::Flush() {
+  command_recorder_.CloseAndExecute();
 }
 
 ComPtr<ID3D12Device> ExecutionContext::GetD3D12Device() const {

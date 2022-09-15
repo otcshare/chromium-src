@@ -39,11 +39,13 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
                           IDMLCompiledOperator* compiled_operator,
                           const DML_BINDING_DESC& input_array_binding);
 
-  HRESULT ExecuteGraph(
-      uint32_t graph_id,
-      IDMLCompiledOperator* compiled_operator,
-      const std::vector<DML_BINDING_DESC>& input_bindings,
-      const std::vector<DML_BINDING_DESC>& output_bindings);
+  HRESULT ExecuteGraph(uint32_t graph_id,
+                       IDMLCompiledOperator* compiled_operator,
+                       const std::vector<DML_BINDING_DESC>& input_bindings,
+                       const std::vector<DML_BINDING_DESC>& output_bindings);
+
+  // Forces all queued work to begin executing on the GPU.
+  void Flush();
 
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<ID3D12CommandQueue> GetCommandQueue() const;

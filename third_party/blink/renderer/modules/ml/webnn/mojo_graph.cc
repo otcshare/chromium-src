@@ -428,7 +428,7 @@ void MojoGraph::OnGraphCreated(
       std::move(pending_remote),
       execution_context->GetTaskRunner(TaskType::kInternalDefault));
 
-  base::CheckedNumeric<size_t> inputs_buffer_length(0);
+  base::CheckedNumeric<size_t> aligned_offset(0);
   for (const auto& input : request->inputs_) {
     size_t input_byte_length = 0;
     if (!input->CalculateByteLength(input_byte_length)) {
@@ -438,7 +438,6 @@ void MojoGraph::OnGraphCreated(
               input->Name()));
       return;
     }
-    input_byte_length = Align(input_byte_length, kBufferAlignment).ValueOrDie();
     auto desc = ml::webnn::mojom::blink::OperandDescriptor::New();
     desc->data_type = BlinkOperandTypeToMojo(input->Type());
     desc->dimensions = input->Dimensions();
@@ -447,11 +446,12 @@ void MojoGraph::OnGraphCreated(
 
     inputs_byte_length_.insert(input->Name(), input_byte_length);
     inputs_byte_offset_.insert(input->Name(),
-                               inputs_buffer_length.ValueOrDie());
-    inputs_buffer_length += input_byte_length;
+                               aligned_offset.ValueOrDie());
+    aligned_offset += Align(input_byte_length, kBufferAlignment).ValueOrDie();
   }
+  size_t inputs_buffer_length = aligned_offset.ValueOrDie();
   inputs_shm_region_ = base::ReadOnlySharedMemoryRegion::Create(
-      inputs_buffer_length.ValueOrDie());
+      inputs_buffer_length);
 
   base::CheckedNumeric<size_t> constants_buffer_length(0);
   for (const auto& constant : request->constants_) {
@@ -463,22 +463,19 @@ void MojoGraph::OnGraphCreated(
       base::ReadOnlySharedMemoryRegion::Create(
           constants_buffer_length.ValueOrDie());
   auto constants_info = ml::webnn::mojom::blink::ConstantsInfo::New();
-  base::CheckedNumeric<size_t> constant_offset(0);
+  base::CheckedNumeric<size_t> aligned_constant_offset(0);
   for (const auto& constant : request->constants_) {
     auto desc = ml::webnn::mojom::blink::OperandDescriptor::New();
     desc->data_type = BlinkOperandTypeToMojo(constant->Type());
     desc->dimensions = constant->Dimensions();
     desc->object_id = constant->GetObjectId();
-
-    auto* array_buffer_view = constant->ArrayBufferView();
-    size_t size =
-        Align(array_buffer_view->byteLength(), kBufferAlignment).ValueOrDie();
     remote_graph_->AddConstant(std::move(desc));
 
     auto memory_info = ml::webnn::mojom::blink::MemoryInfo::New();
-    memory_info->byte_offset = constant_offset.ValueOrDie();
-    memory_info->byte_length = size;
-    constant_offset += size;
+    auto* array_buffer_view = constant->ArrayBufferView();
+    memory_info->byte_offset = aligned_constant_offset.ValueOrDie();
+    memory_info->byte_length = array_buffer_view->byteLength();
+    aligned_constant_offset += Align(memory_info->byte_length, kBufferAlignment);
 
     uint8_t* address = constants_shm_region.mapping.GetMemoryAs<uint8_t>() +
                        memory_info->byte_offset;
