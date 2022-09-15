@@ -7,8 +7,8 @@
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
 #include "content/browser/ml/webnn/dml/execution_context.h"
-#include "content/browser/ml/webnn/dml/graph_dml_impl.h"
 #include "content/browser/ml/webnn/dml/execution_resources.h"
+#include "content/browser/ml/webnn/dml/graph_dml_impl.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
 #include "content/browser/ml/webnn/fusion_operators.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
@@ -452,9 +452,6 @@ std::shared_ptr<EdgeInfoBase> updateEdge(std::shared_ptr<EdgeInfoBase> edge,
 DmlTensorDesc::DmlTensorDesc() = default;
 DmlTensorDesc::~DmlTensorDesc() = default;
 
-MemoryInfo::MemoryInfo() = default;
-MemoryInfo::~MemoryInfo() = default;
-
 InputEdgeInfo::InputEdgeInfo() = default;
 InputEdgeInfo::~InputEdgeInfo() = default;
 
@@ -518,6 +515,8 @@ GraphDMLImpl::GraphDMLImpl(scoped_refptr<ExecutionContext> execution_context,
       execution_context_(execution_context),
       input_resource_uploader_(
           std::make_unique<UploadHeap>(execution_context_.get())),
+      output_resource_readback_(
+          std::make_unique<ReadbackHeap>(execution_context_.get())),
       fusion_operators_(std::make_unique<FusionOperators>()) {
   mCommandQueue = execution_context->GetCommandQueue();
   mCommandAllocator = execution_context->GetCommandAllocator();
@@ -1411,44 +1410,16 @@ void GraphDMLImpl::Build(
   execution_context_->InitializeGraph(graph_id_, mCompiledOperator.Get(),
                                       input_binding_desc);
 
-  CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
-                        mD3D12Device);
+  execution_context_->Flush();
 
-  for (size_t i = 0; i < mOutputs.size(); ++i) {
-    uint64_t byteLength = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
-                              mOutputs[i].outputTensorDESC.Desc)
-                              ->TotalTensorSizeInBytes;
-    uint64_t offset =
-        Align(mOutputsResourceSize, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
-    MemoryInfo memory_info = {};
-    memory_info.byte_offset = offset;
-    memory_info.byte_length = byteLength;
-
-    outputs_info_map_[mOutputs[i].name] = memory_info;
-    mOutputsResourceSize = offset + byteLength;
+  HRESULT hr = output_resource_readback_->InitializeResource(mOutputs);
+  if (FAILED(hr)) {
+    std::move(callback).Run(BuildResult::kUnknownError);
+    return;
   }
-  outputs_shm_region_ =
-      base::ReadOnlySharedMemoryRegion::Create(mOutputsResourceSize);
 
-  if (mOutputsResourceSize) {
-    D3D12_HEAP_PROPERTIES output_heap_properties = CreateHeapProperties();
-    D3D12_RESOURCE_DESC output_resource_desc = CreateResourceDesc(
-        mOutputsResourceSize, D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
-    WEBNN_CHECK(mD3D12Device->CreateCommittedResource(
-        &output_heap_properties, D3D12_HEAP_FLAG_NONE, &output_resource_desc,
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
-        IID_PPV_ARGS(&mOutputResource)));
-
-    D3D12_HEAP_PROPERTIES readback_heap_properties =
-        CreateHeapProperties(D3D12_HEAP_TYPE_READBACK);
-    D3D12_RESOURCE_DESC readback_resource_desc =
-        CreateResourceDesc(mOutputsResourceSize);
-    mD3D12Device->CreateCommittedResource(
-        &readback_heap_properties, D3D12_HEAP_FLAG_NONE,
-        &readback_resource_desc, D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-        IID_PPV_ARGS(&mReadBackResource));
-  }
   std::move(callback).Run(BuildResult::kOk);
+  return;
 }
 
 void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
@@ -1481,61 +1452,45 @@ void GraphDMLImpl::Compute(NamedInputsPtr named_inputs,
     }
   }
 
-  auto named_outputs = ml::webnn::mojom::NamedOutputs::New();
+  ID3D12Resource* outputs_resource =
+      execution_resources->GetResource(graph_id_, ResourceType::kOutput);
+  if (outputs_resource == nullptr) {
+    size_t outputs_resource_size =
+        output_resource_readback_->GetOutputsResourceSize();
+    outputs_resource = execution_resources->Allocate(
+        ResourceType::kOutput, outputs_resource_size, graph_id_);
+  }
   std::vector<DML_BINDING_DESC> output_binding_desc(mOutputs.size());
   // The sort of the outputs from Graph Compute is different from the
   // outputs from Graph Build, so the offset need to be found the corrent output
   // with name to read back from GPU buffer.
   base::flat_map<std::string, DML_BUFFER_BINDING> output_buffer_binding;
-  uint64_t outputOffset = 0;
+  uint64_t aligned_offset = 0;
   for (size_t i = 0; i < mOutputs.size(); ++i) {
-    size_t byteLength = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
-                            mOutputs[i].outputTensorDESC.Desc)
-                            ->TotalTensorSizeInBytes;
-    outputOffset = Align(outputOffset, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
+    size_t byte_length = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
+                             mOutputs[i].outputTensorDESC.Desc)
+                             ->TotalTensorSizeInBytes;
     DML_BUFFER_BINDING buffer_binding;
-    buffer_binding.Buffer = mOutputResource.Get();
-    buffer_binding.Offset = outputOffset;
-    buffer_binding.SizeInBytes = byteLength;
+    buffer_binding.Buffer = outputs_resource;
+    buffer_binding.Offset = aligned_offset;
+    buffer_binding.SizeInBytes = byte_length;
     std::string name = mOutputs[i].name;
     output_buffer_binding[name] = buffer_binding;
     output_binding_desc[i] = {DML_BINDING_TYPE_BUFFER,
                               &output_buffer_binding[name]};
-    outputOffset = outputOffset + byteLength;
+    aligned_offset += Align(byte_length, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);
   }
 
   execution_context_->ExecuteGraph(graph_id_, mCompiledOperator.Get(),
                                    input_binding_desc, output_binding_desc);
 
-  // Copy buffer from outputResource to readBackResource.
-  CopyBufferRegionUtil(mCommandList, mOutputResource, mReadBackResource,
-                       mOutputsResourceSize, D3D12_RESOURCE_STATE_COPY_SOURCE,
-                       false);
-
-  CloseExecuteResetWait(mCommandList, mCommandQueue, mCommandAllocator,
-                        mD3D12Device);
-
-  D3D12_RANGE tensorBufferRange{0, mOutputsResourceSize};
-  int8_t* readBackBuffer;
-  WEBNN_CHECK(mReadBackResource->Map(
-      0, &tensorBufferRange, reinterpret_cast<void**>(&readBackBuffer)));
-
-  for (auto& [name, memory_info] : outputs_info_map_) {
-    auto mojo_memory_info = ml::webnn::mojom::MemoryInfo::New();
-    mojo_memory_info->byte_offset = memory_info.byte_offset;
-    mojo_memory_info->byte_length = memory_info.byte_length;
-    named_outputs->outputs[name] = std::move(mojo_memory_info);
-
-    DML_BUFFER_BINDING buffer_binding = output_buffer_binding[name];
-    std::vector<uint8_t> output_buffer(buffer_binding.SizeInBytes);
-    uint8_t* address = outputs_shm_region_.mapping.GetMemoryAs<uint8_t>() +
-                       memory_info.byte_offset;
-    memcpy(address, readBackBuffer + buffer_binding.Offset,
-           buffer_binding.SizeInBytes);
+  auto named_outputs = ml::webnn::mojom::NamedOutputs::New();
+  HRESULT hr = output_resource_readback_->ReadbackResource(named_outputs,
+                                                           outputs_resource);
+  if (FAILED(hr)) {
+    std::move(callback).Run(ComputeResult::kUnknownError, nullptr);
+    return;
   }
-  named_outputs->shared_memory = outputs_shm_region_.region.Duplicate();
-
-  mReadBackResource->Unmap(0, nullptr);
 
   std::move(callback).Run(ComputeResult::kOk, std::move(named_outputs));
 }

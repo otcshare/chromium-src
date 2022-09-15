@@ -142,25 +142,6 @@ struct EdgeInfo final : public EdgeInfoBase {
   uint32_t outputNodeIndex = 0;
 };
 
-inline void CloseExecuteResetWait(
-    ComPtr<ID3D12GraphicsCommandList> commandList,
-    ComPtr<ID3D12CommandQueue> commandQueue,
-    ComPtr<ID3D12CommandAllocator> commandAllocator,
-    ComPtr<ID3D12Device> D3D12Device) {
-  WEBNN_CHECK(commandList->Close());
-  ID3D12CommandList* commandLists[] = {commandList.Get()};
-  commandQueue->ExecuteCommandLists(ARRAYSIZE(commandLists), commandLists);
-  WEBNN_CHECK(
-      commandQueue.Get()->GetDevice(IID_PPV_ARGS(D3D12Device.GetAddressOf())));
-  ComPtr<ID3D12Fence> fence;
-  WEBNN_CHECK(D3D12Device->CreateFence(0, D3D12_FENCE_FLAG_NONE,
-                                       IID_PPV_ARGS(fence.GetAddressOf())));
-  WEBNN_CHECK(commandQueue.Get()->Signal(fence.Get(), 1));
-  WEBNN_CHECK(fence->SetEventOnCompletion(1, nullptr));
-  WEBNN_CHECK(commandAllocator->Reset());
-  WEBNN_CHECK(commandList->Reset(commandAllocator.Get(), nullptr));
-}
-
 template <typename T>
 void ComputeImplicitPaddingForAutoPad(AutoPad auto_pad,
                                       T dilation,

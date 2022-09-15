@@ -21,6 +21,7 @@
 #include "mojo/public/cpp/bindings/pending_receiver.h"
 #include "utils_dml.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
+#include "content/browser/ml/webnn/dml/readback_heap.h"
 
 namespace content::webnn {
 
@@ -47,13 +48,6 @@ using ml::webnn::mojom::UnaryOperandType;
 }  // namespace
 
 class FusionOperators;
-
-struct MemoryInfo {
-  MemoryInfo();
-  ~MemoryInfo();
-  size_t byte_offset;
-  size_t byte_length;
-};
 
 // Represent the DirectML tensor description.
 struct DmlTensorDesc {
@@ -130,6 +124,7 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   uint32_t graph_id_;
   scoped_refptr<ExecutionContext> execution_context_;
   std::unique_ptr<UploadHeap> input_resource_uploader_;
+  std::unique_ptr<ReadbackHeap> output_resource_readback_;
   // Represents a DirectML device, which is used to create operators, binding
   // tables, command recorders, and other objects.
   ComPtr<IDMLDevice> mDevice;
@@ -144,15 +139,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   ComPtr<ID3D12CommandQueue> mCommandQueue;
   ComPtr<ID3D12CommandAllocator> mCommandAllocator;
   ComPtr<ID3D12GraphicsCommandList> mCommandList;
-
-  UINT64 mOutputsResourceSize = 0;
-  ComPtr<ID3D12Resource> mOutputResource = nullptr;
-  ComPtr<ID3D12Resource> mReadBackResource = nullptr;
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-#else
-  // std::vector<ComPtr<ID3D12Resource>> constants_resource_;
-  std::vector<ComPtr<ID3D12Resource>> inputs_resource_;
-#endif
 
   // Describe a graph of DirectML operators used to compile a combined,
   // optimized operator.
@@ -184,11 +170,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   std::string error_messages_;
   BuildResult build_result_;
   std::unique_ptr<FusionOperators> fusion_operators_;
-
-  std::map<std::string, MemoryInfo> outputs_info_map_;
-  // std::map<std::string, base::ReadOnlySharedMemoryMapping>
-  // outputs_shm_mapping_;
-  base::MappedReadOnlyRegion outputs_shm_region_;
 };
 
 }  // namespace content::webnn

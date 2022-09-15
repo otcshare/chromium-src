@@ -30,7 +30,8 @@ HRESULT UploadResource(ExecutionContext* execution_context,
 
   for (auto& [_, memory_info] : named_inputs) {
     uint64_t byte_length = memory_info->byte_length;
-    DCHECK(byte_length % DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT == 0);
+    uint64_t byte_offset = memory_info->byte_offset;
+    DCHECK(byte_offset % DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT == 0);
     DCHECK(shared_memory_region.IsValid());
     base::ReadOnlySharedMemoryMapping shared_memory_mapping =
         shared_memory_region.MapAt(memory_info->byte_offset, byte_length);
@@ -100,6 +101,10 @@ HRESULT UploadHeap::UploadInputs(ID3D12Resource* dst_resource,
 // piece in GMM resource management.
 HRESULT UploadHeap::CreateUploadResource(size_t byte_length) {
   D3D12_HEAP_PROPERTIES heap_properties;
+  // TODO::Support Unified Memory Architecture (UMA) that don't need to copy
+  // anything there because GPU heaps are always mappable by CPU on unified,
+  // D3D12_HEAP_TYPE_CUSTOM specify the memory pool and CPU cache properties
+  // directly, which can be useful for UMA optimizations.
   heap_properties.Type = D3D12_HEAP_TYPE_UPLOAD;
   heap_properties.CPUPageProperty = D3D12_CPU_PAGE_PROPERTY_UNKNOWN;
   heap_properties.MemoryPoolPreference = D3D12_MEMORY_POOL_UNKNOWN;

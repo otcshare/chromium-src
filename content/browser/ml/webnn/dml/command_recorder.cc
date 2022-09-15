@@ -10,8 +10,9 @@ namespace content::webnn {
 
 CommandRecorder::~CommandRecorder() = default;
 
-CommandRecorder::CommandRecorder(ComPtr<IDMLDevice> dml_device)
-    : dml_device_(dml_device) {}
+CommandRecorder::CommandRecorder(ComPtr<IDMLDevice> dml_device,
+                                 ComPtr<ID3D12CommandQueue> command_queue)
+    : dml_device_(dml_device), command_queue_(command_queue) {}
 
 void CommandRecorder::ResourceBarrier(
     std::vector<const D3D12_RESOURCE_BARRIER> barriers) {
@@ -199,6 +200,21 @@ HRESULT CommandRecorder::ExecuteGraph(
   command_recorder_->RecordDispatch(command_list_.Get(), compiled_operator,
                                     mBindingTable.Get());
   return S_OK;
+}
+
+void CommandRecorder::CloseAndExecute() {
+  WEBNN_CHECK(command_list_->Close());
+  ID3D12CommandList* command_lists[] = {command_list_.Get()};
+  command_queue_->ExecuteCommandLists(ARRAYSIZE(command_lists), command_lists);
+  WEBNN_CHECK(command_queue_.Get()->GetDevice(
+      IID_PPV_ARGS(d3d12_device_.GetAddressOf())));
+  ComPtr<ID3D12Fence> fence;
+  WEBNN_CHECK(d3d12_device_->CreateFence(0, D3D12_FENCE_FLAG_NONE,
+                                         IID_PPV_ARGS(fence.GetAddressOf())));
+  WEBNN_CHECK(command_queue_.Get()->Signal(fence.Get(), 1));
+  WEBNN_CHECK(fence->SetEventOnCompletion(1, nullptr));
+  WEBNN_CHECK(command_allocator_->Reset());
+  WEBNN_CHECK(command_list_->Reset(command_allocator_.Get(), nullptr));
 }
 
 void CommandRecorder::SetExecutionResources(ExecutionResources* resources) {
