@@ -28,61 +28,6 @@ namespace content::webnn {
 using namespace Microsoft::WRL;
 using ml::webnn::mojom::AutoPad;
 
-// TODO
-inline void CopyBufferRegionUtil(ComPtr<ID3D12GraphicsCommandList> commandList,
-                                 ComPtr<ID3D12Resource> srcResource,
-                                 ComPtr<ID3D12Resource> destResource,
-                                 UINT64 resourceSize,
-                                 D3D12_RESOURCE_STATES state,
-                                 bool needBarrierEnd = true) {
-  D3D12_RESOURCE_BARRIER resourceBarrier;
-  if (state == D3D12_RESOURCE_STATE_COPY_DEST) {
-    resourceBarrier.Transition.pResource = destResource.Get();
-  } else if (state == D3D12_RESOURCE_STATE_COPY_SOURCE) {
-    resourceBarrier.Transition.pResource = srcResource.Get();
-  } else {
-    LOG(ERROR) << "Unsupported D3D12_RESOURCE_STATES.";
-    assert(0);
-  }
-  resourceBarrier.Transition.StateBefore =
-      D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-  resourceBarrier.Transition.StateAfter = state;
-  resourceBarrier.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-  resourceBarrier.Flags = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-  resourceBarrier.Transition.Subresource =
-      D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-  commandList->ResourceBarrier(1, &resourceBarrier);
-  commandList->CopyBufferRegion(destResource.Get(), 0, srcResource.Get(), 0,
-                                resourceSize);
-  if (needBarrierEnd) {
-    resourceBarrier.Transition.StateBefore = state;
-    resourceBarrier.Transition.StateAfter =
-        D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
-    commandList->ResourceBarrier(1, &resourceBarrier);
-  }
-}
-
-inline D3D12_HEAP_PROPERTIES CreateHeapProperties(
-    D3D12_HEAP_TYPE type = D3D12_HEAP_TYPE_DEFAULT) {
-  return {type, D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_MEMORY_POOL_UNKNOWN, 1,
-          1};
-};
-
-inline D3D12_RESOURCE_DESC CreateResourceDesc(
-    UINT64 width,
-    D3D12_RESOURCE_FLAGS flags = D3D12_RESOURCE_FLAG_NONE) {
-  return {D3D12_RESOURCE_DIMENSION_BUFFER,
-          0,
-          width,
-          1,
-          1,
-          1,
-          DXGI_FORMAT_UNKNOWN,
-          {1, 0},
-          D3D12_TEXTURE_LAYOUT_ROW_MAJOR,
-          flags};
-};
-
 // Round up to alignment
 inline size_t Align(size_t value, UINT alignment) {
   size_t remainder = value % alignment;
@@ -124,11 +69,7 @@ struct InputEdgeInfo final : public EdgeInfoBase {
   ~InputEdgeInfo() override;
   // Indicate the index of the graph's input.
   size_t inputIndex = 0;
-  size_t byteLength = 0;
   uint32_t object_id;
-  // Indicate if the input is from constant buffer which need to be
-  // uploaded in the stage of initialization.
-  bool isConstantInput = false;
 };
 
 // Represent the information of the intermediate edges and output edges.
@@ -183,47 +124,23 @@ std::vector<T> ComputeImplicitPaddingForAutoPad(const S* options,
 }
 
 template <typename T>
-void ComputeImplicitPaddingForConvTranspose2dAutoPad(AutoPad auto_pad,
-                                                     T dilation,
-                                                     T inputSize,
-                                                     T filterSize,
-                                                     T stride,
-                                                     T outputPadding,
-                                                     T& paddingBegin,
-                                                     T& paddingEnd) {
-  T outSize = inputSize * stride;
-  T totalPadding = stride * (inputSize - 1) + outputPadding +
-                   ((filterSize - 1) * dilation + 1) - outSize;
-  switch (auto_pad) {
-    case AutoPad::kSameUpper:
-      paddingBegin = totalPadding / 2;
-      paddingEnd = totalPadding - totalPadding / 2;
-      break;
-    case AutoPad::kSameLower:
-      paddingBegin = totalPadding - totalPadding / 2;
-      paddingEnd = totalPadding / 2;
-      break;
-    default:
-      assert(0);
-  }
+std::vector<UINT> ImplicitPadding(const T* options,
+                                  const std::vector<UINT>& inputDims,
+                                  const std::vector<UINT>& filterDims) {
+  return ComputeImplicitPaddingForAutoPad<T, UINT>(
+      options, {inputDims[2], inputDims[3]},
+      {filterDims[filterDims.size() - 2], filterDims[filterDims.size() - 1]});
 }
 
-// template <typename T>
-// std::vector<T> ComputeImplicitPaddingForConvTranspose2dAutoPad(
-//     const ConvTranspose2dOptions* options,
-//     std::vector<T> inputSize,
-//     std::vector<T> filterSize) {
-//     std::vector<T> padding(4);
-//     utils::ComputeImplicitPaddingForConvTranspose2dAutoPad<T>(
-//         options->auto_pad, options->dilations[0], inputSize[0],
-//         filterSize[0], options->strides[0], options->outputPadding[0],
-//         padding[0], padding[1]);
-//     utils::ComputeImplicitPaddingForConvTranspose2dAutoPad<T>(
-//         options->auto_pad, options->dilations[1], inputSize[1],
-//         filterSize[1], options->strides[1], options->outputPadding[1],
-//         padding[2], padding[3]);
-//     return padding;
-// }
+template <typename T>
+std::vector<UINT> ExplicitPadding(const T* options) {
+  UINT paddingTop = static_cast<UINT>(options->padding[0]);
+  UINT paddingBottom = static_cast<UINT>(options->padding[1]);
+  UINT paddingLeft = static_cast<UINT>(options->padding[2]);
+  UINT paddingRight = static_cast<UINT>(options->padding[3]);
+
+  return {paddingTop, paddingBottom, paddingLeft, paddingRight};
+}
 
 }  // namespace content::webnn
 
