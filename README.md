@@ -55,8 +55,8 @@ System requirements and environment  setup can follow [the instructions of build
 * Setup and Run Webnn-samples 
 ```sh
 > git clone --recurse-submodules https://github.com/fujunwei/webnn-samples.git
-> git fetch origin webnn_mojo
-> cd webnn-samples & npm install
+> cd webnn-samples & git fetch origin webnn_mojo & git checkout webnn_mojo
+> npm install
 > npm start
 ```
 Navigate the open browser to http://localhost:8080, select image classification sample and run MobileNet V2(NCHW) for GPU that is currently supported.
