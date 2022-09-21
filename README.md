@@ -1,21 +1,59 @@
-# ![Logo](chrome/app/theme/chromium/product_logo_64.png) Chromium
+System requirements and environment  setup can follow [the instructions of building chromium on windows](https://chromium.googlesource.com/chromium/src/+/main/docs/windows_build_instructions.md)
 
-Chromium is an open-source browser project that aims to build a safer, faster,
-and more stable way for all users to experience the web.
+## Get the code
+* Create a chromium directory for the checkout and change to it (you can call this whatever you like and put it wherever you like, as long as the full path has no spaces):  
+`$ mkdir chromium && cd chromium`
 
-The project's web site is https://www.chromium.org.
+* Clone the chromium-src repository:  
+`$ git clone https://github.com/otcshare/chromium-src.git`
 
-To check out the source code locally, don't use `git clone`! Instead,
-follow [the instructions on how to get the code](docs/get_the_code.md).
+* Create .gclient file and edit the file to contain the following arguments:  
+`solutions = [`  
+`  {`  
+`    "url": "http://github.com/otcshare/chromium-src.git@webnn_mojo",`  
+`    "managed": False,`  
+`    "name": "chromium-src",`  
+`    "deps_file": ".DEPS.git",`  
+`    "custom_deps": {},`  
+`  },`  
+`]`
 
-Documentation in the source is rooted in [docs/README.md](docs/README.md).
 
-Learn how to [Get Around the Chromium Source Code Directory Structure
-](https://www.chromium.org/developers/how-tos/getting-around-the-chrome-source-code).
+## Update your checkout and run the hooks
+* The remaining instructions assume you have switched to the src directory:  
+`$ cd chromium-src`
 
-For historical reasons, there are some small top level directories. Now the
-guidance is that new top level directories are for product (e.g. Chrome,
-Android WebView, Ash). Even if these products have multiple executables, the
-code should be in subdirectories of the product.
+* To update an existing checkout, you can run:  
+`$ gclient sync`
 
-If you found a bug, please file it at https://crbug.com/new.
+## Setting up the build
+* Chromium uses Ninja as its main build tool along with a tool called GN to generate .ninja files. You can create any number of build directories with different configurations. To create a build directory, run:  
+`$ gn gen out/Default`
+
+* To config the flags for WebNN, run gn args out/Default and edit the file to contain the following arguments:  
+`$ gn args out/Default`  
+`target_os = "win"`  
+`target_cpu = "x64"`  
+`is_debug = false`  
+`is_component_build = false`
+  > You only have to run this once for each new build directory, Ninja will update the build files as needed.  
+    You can replace Default with another name, but it should be a subdirectory of out.
+
+## Build Chromium
+* Build Chromium (the “chrome” target) with Ninja using the command:  
+`$ autoninja -C out\Default chrome`
+
+## Run Chromium
+* Once it is built, you can simply run the browser:  
+`$ out\Default\chrome.exe  --enable-blink-test-features`
+
+## Test
+* Setup and Run Webnn-samples 
+```sh
+> git clone https://github.com/fujunwei/webnn-samples.git
+> git fetch origin webnn_mojo
+> cd webnn-samples & npm install
+> npm start
+```
+
+Open the web browser and navigate to http://localhost:8080, select MobileNet that is currently supported model
