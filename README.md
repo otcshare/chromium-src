@@ -47,7 +47,7 @@ System requirements and environment  setup can follow [the instructions of build
 * Once it is built, you can simply run the browser:  
 `$ out\Default\chrome.exe  --enable-blink-test-features`
 
-* Enable flags for WebNN with opening "chrome://flags/" URL in browser and select below two items:  
+* Search via "chrome://flags/" URL in browser to enable flags for WebNN, you may need restart browser after enabling flags:  
 `Experimental Web Platform features`  
 `Enables Machine Learning Neural Network Web Platform API`
 
