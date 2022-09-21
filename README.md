@@ -7,12 +7,15 @@ System requirements and environment  setup can follow [the instructions of build
 * Clone the chromium-src repository:  
 `$ git clone https://github.com/otcshare/chromium-src.git`
 
+* Rename the chromium-src to src:  
+`$ rename chromium-src src`
+
 * Create .gclient file and edit the file to contain the following arguments:  
 `solutions = [`  
 `  {`  
 `    "url": "http://github.com/otcshare/chromium-src.git@webnn_mojo",`  
 `    "managed": False,`  
-`    "name": "chromium-src",`  
+`    "name": "src",`  
 `    "deps_file": ".DEPS.git",`  
 `    "custom_deps": {},`  
 `  },`  
@@ -21,7 +24,7 @@ System requirements and environment  setup can follow [the instructions of build
 
 ## Update your checkout and run the hooks
 * The remaining instructions assume you have switched to the src directory:  
-`$ cd chromium-src`
+`$ cd src`
 
 * To update an existing checkout, you can run:  
 `$ gclient sync`
