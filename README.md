@@ -47,13 +47,16 @@ System requirements and environment  setup can follow [the instructions of build
 * Once it is built, you can simply run the browser:  
 `$ out\Default\chrome.exe  --enable-blink-test-features`
 
+* Enable flags for WebNN with opening "chrome://flags/" URL in browser and select below two items:  
+`Experimental Web Platform features`  
+`Enables Machine Learning Neural Network Web Platform API`
+
 ## Test
 * Setup and Run Webnn-samples 
 ```sh
-> git clone https://github.com/fujunwei/webnn-samples.git
+> git clone --recurse-submodules https://github.com/fujunwei/webnn-samples.git
 > git fetch origin webnn_mojo
 > cd webnn-samples & npm install
 > npm start
 ```
-
-Open the web browser and navigate to http://localhost:8080, select MobileNet that is currently supported model
+Navigate the open browser to http://localhost:8080, select image classification sample and run MobileNet V2(NCHW) for GPU that is currently supported.
