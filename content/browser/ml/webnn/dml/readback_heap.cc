@@ -15,16 +15,14 @@ ReadbackHeap::ReadbackHeap(ExecutionContext* execution_context)
 
 ReadbackHeap::~ReadbackHeap() = default;
 
-HRESULT ReadbackHeap::InitializeResource(std::vector<EdgeInfo>& outputs_info) {
+HRESULT ReadbackHeap::InitializeResource(
+    std::map<std::string, size_t>& named_outputs) {
   uint64_t aligned_offset = 0;
-  for (auto& output_info : outputs_info) {
-    uint64_t byte_length = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
-                               output_info.outputTensorDESC.Desc)
-                               ->TotalTensorSizeInBytes;
+  for (auto& [name, byte_length] : named_outputs) {
     MemoryInfo memory_info = {};
     memory_info.byte_offset = aligned_offset;
     memory_info.byte_length = byte_length;
-    outputs_info_map_[output_info.name] = memory_info;
+    outputs_info_map_[name] = memory_info;
 
     // Only offset need to be algnement, the byte length keep original value.
     aligned_offset += Align(byte_length, DML_MINIMUM_BUFFER_TENSOR_ALIGNMENT);

@@ -24,7 +24,7 @@ class ReadbackHeap final {
   explicit ReadbackHeap(ExecutionContext* execution_context);
   ~ReadbackHeap();
 
-  HRESULT InitializeResource(std::vector<EdgeInfo>& outputs_info);
+  HRESULT InitializeResource(std::map<std::string, size_t>& named_outputs);
   HRESULT ReadbackResource(NamedOutputsPtr& named_outputs,
                            ID3D12Resource* src_resource);
   size_t GetOutputsResourceSize() const;
