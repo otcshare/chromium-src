@@ -23,10 +23,10 @@ OperatorNode::OperatorNode(const OperatorNode&& other) {
 OperatorNode::OperatorNode() = default;
 OperatorNode::~OperatorNode() = default;
 
-NodeOutput::NodeOutput(Node node,
-                       uint32_t output_index,
-                       DML_TENSOR_DESC tensor_desc)
-    : node_(node), output_index_(output_index), tensor_desc_(tensor_desc) {}
+NodeOutput::NodeOutput(Node node, uint32_t output_index, TensorDesc tensor_desc)
+    : node_(node),
+      output_index_(output_index),
+      tensor_desc_(std::move(tensor_desc)) {}
 
 NodeOutput::~NodeOutput() = default;
 
@@ -38,7 +38,7 @@ uint32_t NodeOutput::GetOutputIndex() const {
   return output_index_;
 }
 
-DML_TENSOR_DESC& NodeOutput::GetTensorDesc() {
+TensorDesc& NodeOutput::GetTensorDesc() {
   return tensor_desc_;
 }
 

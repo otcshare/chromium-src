@@ -37,6 +37,8 @@ source_set("lib") {
     "dml/graph_desc_builder.h",
     "dml/graph_node_output.cc",
     "dml/graph_node_output.h",
+    "dml/graph_tensor_desc.cc",
+    "dml/graph_tensor_desc.h",
     "dml/mojo_server_dml_impl.cc",
     "dml/mojo_server_dml_impl.h",
     "dml/readback_heap.cc",
