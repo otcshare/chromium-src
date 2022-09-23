@@ -60,8 +60,9 @@ Node GraphDescBuilder::CreateOperatorNode(DML_OPERATOR_TYPE type,
 std::unique_ptr<NodeOutput> GraphDescBuilder::CreateNodeOutput(
     Node node,
     uint32_t output_index,
-    DML_TENSOR_DESC tensor_desc) {
-  return std::make_unique<NodeOutput>(node, output_index, tensor_desc);
+    TensorDesc tensor_desc) {
+  return std::make_unique<NodeOutput>(node, output_index,
+                                      std::move(tensor_desc));
 }
 
 void GraphDescBuilder::Connect(std::vector<NodeOutput*> inputs,
@@ -98,10 +99,8 @@ void GraphDescBuilder::AddOutputEdge(NodeOutput* node_output,
   output_edge.GraphOutputIndex = output_index;
   graph_desc_.output_edges.push_back(output_edge);
 
-  size_t byte_length = reinterpret_cast<const DML_BUFFER_TENSOR_DESC*>(
-                           node_output->GetTensorDesc().Desc)
-                           ->TotalTensorSizeInBytes;
-  named_outputs_[name] = byte_length;
+  named_outputs_[name] =
+      node_output->GetTensorDesc().GetTotalTensorSizeInBytes();
 }
 
 ComPtr<IDMLCompiledOperator> GraphDescBuilder::Compile(

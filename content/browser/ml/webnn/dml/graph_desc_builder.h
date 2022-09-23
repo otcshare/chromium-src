@@ -11,6 +11,7 @@
 
 #include "DirectML.h"
 #include "content/browser/ml/webnn/dml/graph_node_output.h"
+#include "content/browser/ml/webnn/dml/graph_tensor_desc.h"
 
 namespace content::webnn {
 
@@ -24,7 +25,7 @@ class GraphDescBuilder final {
   Node CreateOperatorNode(DML_OPERATOR_TYPE type, const void* desc);
   std::unique_ptr<NodeOutput> CreateNodeOutput(Node node,
                               uint32_t output_index,
-                              DML_TENSOR_DESC tensor_desc);
+                              TensorDesc tensor_desc);
   void Connect(std::vector<NodeOutput*>, Node operator_node);
   void AddOutputEdge(NodeOutput* node_output, std::string name);
   ComPtr<IDMLCompiledOperator> Compile(DML_EXECUTION_FLAGS flags);

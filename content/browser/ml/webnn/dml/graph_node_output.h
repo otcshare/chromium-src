@@ -9,6 +9,7 @@
 
 #include <wrl.h>
 #include "DirectML.h"
+#include "content/browser/ml/webnn/dml/graph_tensor_desc.h"
 
 namespace content::webnn {
 
@@ -57,12 +58,12 @@ class NodeOutput final {
  public:
   explicit NodeOutput(Node node,
                       uint32_t output_index,
-                      DML_TENSOR_DESC tensor_desc);
+                      TensorDesc tensor_desc);
   ~NodeOutput();
 
   Node GetNode() const;
   uint32_t GetOutputIndex() const;
-  DML_TENSOR_DESC& GetTensorDesc();
+  TensorDesc& GetTensorDesc();
 
  private:
   Node node_;
@@ -70,7 +71,7 @@ class NodeOutput final {
   // the operator's outputs this node represents.
   uint32_t output_index_;
   // TODO::Wrapped into a class
-  DML_TENSOR_DESC tensor_desc_;
+  TensorDesc tensor_desc_;
 };
 
 }  // namespace content::webnn

@@ -50,17 +50,6 @@ using ml::webnn::mojom::UnaryOperandType;
 }  // namespace
 
 class FusionOperators;
-
-// Represent the DirectML tensor description.
-struct DmlTensorDesc {
-  DmlTensorDesc();
-  ~DmlTensorDesc();
-  std::vector<UINT> dimensions = {};
-  std::vector<UINT> strides = {};
-  // Describes a tensor that will be stored in a Direct3D 12 buffer resource.
-  DML_BUFFER_TENSOR_DESC bufferDesc = {};
-};
-
 class ExecutionContext;
 
 class GraphDMLImpl : public ml::webnn::mojom::Graph {
@@ -132,8 +121,6 @@ class GraphDMLImpl : public ml::webnn::mojom::Graph {
   ComPtr<IDMLCompiledOperator> mCompiledOperator;
 
   std::map<uint32_t, std::unique_ptr<NodeOutput>> node_output_map_;
-  // Keep the input tensors description here to avoid releasing too early.
-  std::vector<std::shared_ptr<DmlTensorDesc>> mDmlTensorsDesc;
 
   std::string error_messages_;
   BuildResult build_result_;

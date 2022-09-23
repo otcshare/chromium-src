@@ -43,8 +43,7 @@ std::pair<size_t, T> Align(T& memory_info_map, UINT alignment) {
   T aligned_memory_info_map;
   size_t aligned_offset = 0;
   for (auto& [key, memory_info] : memory_info_map) {
-    uint64_t aligned_byte_length =
-        Align(memory_info->byte_length, alignment);
+    uint64_t aligned_byte_length = Align(memory_info->byte_length, alignment);
     auto aligned_memory_info = ml::webnn::mojom::MemoryInfo::New();
     aligned_memory_info->byte_offset = aligned_offset;
     aligned_memory_info->byte_length = aligned_byte_length;
@@ -55,33 +54,17 @@ std::pair<size_t, T> Align(T& memory_info_map, UINT alignment) {
   return std::make_pair(aligned_offset, std::move(aligned_memory_info_map));
 }
 
-// Represent the information of the graph's edges.
-struct EdgeInfoBase {
-  virtual ~EdgeInfoBase() = default;
-  DML_TENSOR_DESC outputTensorDESC = {};
-  std::string name = "";
-  bool isInputEdge = false;
-};
-
-// Only represent the information of the input edges.
-struct InputEdgeInfo final : public EdgeInfoBase {
-  InputEdgeInfo();
-  ~InputEdgeInfo() override;
-  // Indicate the index of the graph's input.
-  size_t inputIndex = 0;
-  uint32_t object_id;
-};
-
-// Represent the information of the intermediate edges and output edges.
-struct EdgeInfo final : public EdgeInfoBase {
-  ~EdgeInfo() override = default;
-  // Indicate the index of the intermediate node from which this edge was
-  // produced.
-  uint32_t nodeIndex = 0;
-  // Indicate the index of the intermediate node' output from which this edge
-  // was produced.
-  uint32_t outputNodeIndex = 0;
-};
+inline std::vector<UINT> ConvertDimensions(const std::vector<int32_t>& dimensions) {
+  std::vector<UINT> convertedDimensions;
+  for (auto dim : dimensions) {
+    if (dim < 0) {
+      LOG(ERROR) << "DML doesn't support the negative dimension value";
+      assert(0);
+    }
+    convertedDimensions.push_back(dim);
+  }
+  return convertedDimensions;
+}
 
 template <typename T>
 void ComputeImplicitPaddingForAutoPad(AutoPad auto_pad,
