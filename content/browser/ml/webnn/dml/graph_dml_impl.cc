@@ -277,7 +277,7 @@ std::vector<UINT> CalculateStridesForBroadcast(
   node = graph_desc_builder_->CreateOperatorNode(                  \
       DML_OPERATOR_ELEMENT_WISE_##type, &operator_desc);
 
-#define CREATE_UNARY_OPERATOR(type, input_tensor_desc, node)   \
+#define CREATE_UNARY_OPERATOR(type, input_tensor_desc, node)          \
   DML_##type##_OPERATOR_DESC operator_desc{};                         \
   operator_desc.InputTensor = input_tensor_desc;                      \
   operator_desc.OutputTensor = input_tensor_desc;                     \
@@ -604,7 +604,8 @@ void GraphDMLImpl::AddReshape(uint32_t input_id,
   auto output_dims = ConvertDimensions(output_desc->dimensions);
   auto* input_node = node_output_map_[input_id].get();
   auto& input_tensor_desc = input_node->GetTensorDesc();
-  TensorDesc output_tensor(input_tensor_desc.GetDataType(), output_dims);
+  TensorDesc output_tensor(input_tensor_desc.GetDataType(),
+                           input_tensor_desc.GetFlags(), output_dims);
   // Reshape is not a real node in DML, just need to update node output with new
   // tensor.
   auto node = input_node->GetNode();
