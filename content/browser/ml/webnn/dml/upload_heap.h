@@ -35,7 +35,7 @@ class UploadHeap final {
   HRESULT CreateUploadResource(size_t byte_length);
 
   ExecutionContext* execution_context_;
-  RESOURCE_PTR upload_resource_;
+  ComPtr<gpgmm::d3d12::ResourceAllocation> upload_resource_;
 };
 
 }  // namespace content::webnn

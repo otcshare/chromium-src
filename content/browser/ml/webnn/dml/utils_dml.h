@@ -29,24 +29,6 @@ namespace content::webnn {
 using namespace Microsoft::WRL;
 using ml::webnn::mojom::AutoPad;
 
-#define ENABLE_GPU_MEMORY_MANAGEMENT
-
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-// Allocate gpu resource with ResourceAllocator and manage it with Residency
-// management
-#define RESOURCE_PTR ComPtr<gpgmm::d3d12::ResourceAllocation>
-#else
-#define RESOURCE_PTR ComPtr<ID3D12Resource>
-#endif
-
-inline ID3D12Resource* GetD3D12Resource(RESOURCE_PTR resource_ptr) {
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-  return resource_ptr->GetResource();
-#else
-  return resource_ptr.Get();
-#endif
-}
-
 // Round up to alignment
 inline size_t Align(size_t value, UINT alignment) {
   size_t remainder = value % alignment;

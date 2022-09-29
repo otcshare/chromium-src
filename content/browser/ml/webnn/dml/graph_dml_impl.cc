@@ -892,7 +892,7 @@ void GraphDMLImpl::Build(
   // variable.
   std::unique_ptr<UploadHeap> uploader =
       std::make_unique<UploadHeap>(execution_context_.get());
-  RESOURCE_PTR constants_resource = nullptr;
+  ComPtr<gpgmm::d3d12::ResourceAllocation> constants_resource = nullptr;
   if (constants_info.get() != nullptr) {
     base::ReadOnlySharedMemoryRegion& shared_memory_region =
         constants_info->shared_memory;
@@ -900,7 +900,7 @@ void GraphDMLImpl::Build(
     ExecutionResources* execution_resources =
         execution_context_->GetExecutionResources();
     constants_resource = execution_resources->Allocate(constants_byte_length);
-    uploader->UploadConstants(GetD3D12Resource(constants_resource),
+    uploader->UploadConstants(constants_resource->GetResource(),
                               constants_info);
   }
 
@@ -909,7 +909,7 @@ void GraphDMLImpl::Build(
   for (size_t i = 0; i < input_nodes.size(); ++i) {
     auto input = input_nodes[i];
     if (input.type == NodeType::kConstant) {
-      input_buffer_binding[i].Buffer = GetD3D12Resource(constants_resource);
+      input_buffer_binding[i].Buffer = constants_resource->GetResource();
       auto& memory_info = constants_info->constants[input.object_id];
       input_buffer_binding[i].Offset = memory_info->byte_offset;
       input_buffer_binding[i].SizeInBytes = memory_info->byte_length;

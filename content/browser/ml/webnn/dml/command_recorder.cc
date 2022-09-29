@@ -61,7 +61,6 @@ HRESULT CommandRecorder::Initialize() {
     return hr;
   }
 
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
   D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
   hr = d3d12_device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options,
                                           sizeof(options));
@@ -78,7 +77,6 @@ HRESULT CommandRecorder::Initialize() {
   if (FAILED(hr)) {
     return hr;
   }
-#endif
 
   return S_OK;
 }

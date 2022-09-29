@@ -15,7 +15,8 @@ ExecutionResources::ExecutionResources(ExecutionContext* execution_context)
 
 ExecutionResources::~ExecutionResources() = default;
 
-RESOURCE_PTR ExecutionResources::Allocate(UINT64 resource_size) {
+ComPtr<gpgmm::d3d12::ResourceAllocation> ExecutionResources::Allocate(
+    UINT64 resource_size) {
   ID3D12Device* d3d12_device = execution_context_->GetD3D12Device().Get();
   // Use Committed resource directly that is managed by default.
   D3D12_HEAP_PROPERTIES heap_properties;
@@ -47,10 +48,7 @@ RESOURCE_PTR ExecutionResources::Allocate(UINT64 resource_size) {
     return nullptr;
   }
 
-  RESOURCE_PTR resource;
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-  // D3D12 creates an implicit heap that contains the resource allocation when
-  // calling CreateCommittedResource.
+  ComPtr<gpgmm::d3d12::ResourceAllocation> resource;
   // TODO: Store a heap object for every allocated ResourceAllocation that will
   // be managed by residency management.
   gpgmm::d3d12::ALLOCATION_DESC allocation_descriptor = {};
@@ -59,11 +57,6 @@ RESOURCE_PTR ExecutionResources::Allocate(UINT64 resource_size) {
   execution_context_->GetResourceAllocator()->CreateResource(
       allocation_descriptor, resource_desc,
       D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, &resource);
-#else
-  d3d12_device->CreateCommittedResource(
-      &heap_properties, D3D12_HEAP_FLAG_NONE, &resource_desc,
-      D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&resource));
-#endif
 
   return resource;
 }
@@ -72,14 +65,14 @@ ID3D12Resource* ExecutionResources::Allocate(ResourceType type,
                                              UINT64 resource_size,
                                              UINT32 graph_id) {
   DCHECK_GT(graph_id, (uint32_t)(0));
-  RESOURCE_PTR resource = Allocate(resource_size);
+  ComPtr<gpgmm::d3d12::ResourceAllocation> resource = Allocate(resource_size);
   if (pool_.find(graph_id) == pool_.end()) {
     pool_[graph_id] = Resources(type, resource);
   } else {
     auto& resources = pool_[graph_id].resources;
     resources[type] = resource;
   }
-  return GetD3D12Resource(resource);
+  return resource->GetResource();
 }
 
 ID3D12Resource* ExecutionResources::GetResource(UINT32 graph_id,
@@ -93,7 +86,7 @@ ID3D12Resource* ExecutionResources::GetResource(UINT32 graph_id,
   if (resources.find(type) == resources.end()) {
     return nullptr;
   }
-  return GetD3D12Resource(resources[type]);
+  return resources[type]->GetResource();
 }
 
 void ExecutionResources::Free(UINT32 graph_id) {
@@ -104,8 +97,9 @@ void ExecutionResources::Free(UINT32 graph_id) {
 }
 
 ExecutionResources::Resources::Resources() = default;
-ExecutionResources::Resources::Resources(ResourceType type,
-                                         RESOURCE_PTR resource) {
+ExecutionResources::Resources::Resources(
+    ResourceType type,
+    ComPtr<gpgmm::d3d12::ResourceAllocation> resource) {
   resources[type] = resource;
 }
 ExecutionResources::Resources::~Resources() = default;

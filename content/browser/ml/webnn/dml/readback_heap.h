@@ -43,7 +43,7 @@ class ReadbackHeap final {
   UINT64 outputs_resource_size_ = 0;
   std::map<std::string, MemoryInfo> outputs_info_map_;
   base::MappedReadOnlyRegion outputs_shm_region_;
-  RESOURCE_PTR readback_resource_;
+  ComPtr<gpgmm::d3d12::ResourceAllocation> readback_resource_;
 };
 
 }  // namespace content::webnn

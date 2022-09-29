@@ -35,7 +35,7 @@ class ExecutionResources final {
   ~ExecutionResources();
 
   // Allocate a resource that is released by manually.
-  RESOURCE_PTR Allocate(UINT64 resource_size);
+  ComPtr<gpgmm::d3d12::ResourceAllocation> Allocate(UINT64 resource_size);
   // Allocate a resource that is owned by a graph and reused for execution.
   ID3D12Resource* Allocate(ResourceType type,
                            UINT64 resource_size,
@@ -48,10 +48,10 @@ class ExecutionResources final {
  private:
   struct Resources {
     Resources();
-    Resources(ResourceType type, RESOURCE_PTR resource);
+    Resources(ResourceType type, ComPtr<gpgmm::d3d12::ResourceAllocation> resource);
     ~Resources();
 
-    std::map<ResourceType, RESOURCE_PTR> resources;
+    std::map<ResourceType, ComPtr<gpgmm::d3d12::ResourceAllocation>> resources;
   };
 
   ExecutionContext* execution_context_;
