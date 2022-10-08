@@ -32,6 +32,7 @@ class AdapterDML final : public base::RefCounted<AdapterDML> {
   AdapterDML& operator=(const AdapterDML&) = delete;
 
   HRESULT Initialize();
+  ComPtr<IDXGIAdapter3> GetHardwareAdapter() const;
   AdapterType GetAdapterType();
   ComPtr<ID3D12Device> GetD3D12Device() const;
   ComPtr<IDMLDevice> GetDMLDevice() const;

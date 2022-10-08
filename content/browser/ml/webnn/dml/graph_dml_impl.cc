@@ -10,9 +10,9 @@
 #include "content/browser/ml/webnn/dml/execution_resources.h"
 #include "content/browser/ml/webnn/dml/graph_dml_impl.h"
 #include "content/browser/ml/webnn/dml/upload_heap.h"
+#include "content/browser/ml/webnn/dml/utils_dml.h"
 #include "content/browser/ml/webnn/fusion_operators.h"
 #include "mojo/public/cpp/bindings/self_owned_receiver.h"
-#include "utils_dml.h"
 
 namespace content::webnn {
 
@@ -892,7 +892,7 @@ void GraphDMLImpl::Build(
   // variable.
   std::unique_ptr<UploadHeap> uploader =
       std::make_unique<UploadHeap>(execution_context_.get());
-  ComPtr<ID3D12Resource> constants_resource = nullptr;
+  ComPtr<gpgmm::d3d12::ResourceAllocation> constants_resource = nullptr;
   if (constants_info.get() != nullptr) {
     base::ReadOnlySharedMemoryRegion& shared_memory_region =
         constants_info->shared_memory;
@@ -900,7 +900,8 @@ void GraphDMLImpl::Build(
     ExecutionResources* execution_resources =
         execution_context_->GetExecutionResources();
     constants_resource = execution_resources->Allocate(constants_byte_length);
-    uploader->UploadConstants(constants_resource.Get(), constants_info);
+    uploader->UploadConstants(constants_resource->GetResource(),
+                              constants_info);
   }
 
   auto input_nodes = graph_desc_builder_->GetInputNodes();
@@ -908,7 +909,7 @@ void GraphDMLImpl::Build(
   for (size_t i = 0; i < input_nodes.size(); ++i) {
     auto input = input_nodes[i];
     if (input.type == NodeType::kConstant) {
-      input_buffer_binding[i].Buffer = constants_resource.Get();
+      input_buffer_binding[i].Buffer = constants_resource->GetResource();
       auto& memory_info = constants_info->constants[input.object_id];
       input_buffer_binding[i].Offset = memory_info->byte_offset;
       input_buffer_binding[i].SizeInBytes = memory_info->byte_length;

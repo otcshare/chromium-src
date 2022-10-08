@@ -12,7 +12,7 @@ namespace content::webnn {
 ExecutionContext::ExecutionContext(scoped_refptr<AdapterDML> adapter)
     : d3d12_device_(adapter->GetD3D12Device()),
       command_queue_(adapter->GetCommandQueue()),
-      command_recorder_(adapter->GetDMLDevice(), command_queue_) {}
+      command_recorder_(adapter, adapter->GetDMLDevice(), command_queue_) {}
 
 ExecutionContext::~ExecutionContext() = default;
 
@@ -140,6 +140,11 @@ ComPtr<ID3D12GraphicsCommandList> ExecutionContext::GetCommandList() {
 
 ComPtr<IDMLDevice> ExecutionContext::GetDMLDevice() {
   return command_recorder_.GetDMLDevice();
+}
+
+ComPtr<gpgmm::d3d12::ResourceAllocator>
+ExecutionContext::GetResourceAllocator() {
+  return command_recorder_.GetResourceAllocator();
 }
 
 }  // namespace content::webnn

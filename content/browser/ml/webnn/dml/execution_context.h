@@ -12,6 +12,7 @@
 #include "base/memory/ref_counted.h"
 #include "content/browser/ml/webnn/dml/command_recorder.h"
 #include "content/browser/ml/webnn/dml/execution_resources.h"
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
 
 namespace content::webnn {
 
@@ -61,6 +62,7 @@ class ExecutionContext final : public base::RefCounted<ExecutionContext> {
   ComPtr<ID3D12CommandAllocator> GetCommandAllocator();
   ComPtr<ID3D12GraphicsCommandList> GetCommandList();
   ComPtr<IDMLDevice> GetDMLDevice();
+  ComPtr<gpgmm::d3d12::ResourceAllocator> GetResourceAllocator();
 
  private:
   friend class base::RefCounted<ExecutionContext>;

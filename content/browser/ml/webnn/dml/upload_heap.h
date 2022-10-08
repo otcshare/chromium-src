@@ -10,6 +10,8 @@
 
 #include "DirectML.h"
 #include "components/ml/mojom/webnn_graph.mojom.h"
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
+#include "content/browser/ml/webnn/dml/utils_dml.h"
 
 namespace content::webnn {
 
@@ -25,7 +27,7 @@ class UploadHeap final {
   ~UploadHeap();
 
   HRESULT UploadConstants(ID3D12Resource* dst_resource,
-                       ConstantsInfoPtr& constants_info);
+                          ConstantsInfoPtr& constants_info);
   HRESULT UploadInputs(ID3D12Resource* dst_resource,
                        NamedInputsPtr& named_inputs);
 
@@ -33,11 +35,7 @@ class UploadHeap final {
   HRESULT CreateUploadResource(size_t byte_length);
 
   ExecutionContext* execution_context_;
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-  // GMM will re-use resource memory using FIFO for upload handle.
-#else
-  ComPtr<ID3D12Resource> upload_resource_;
-#endif
+  ComPtr<gpgmm::d3d12::ResourceAllocation> upload_resource_;
 };
 
 }  // namespace content::webnn

@@ -10,6 +10,7 @@
 
 #include "DirectML.h"
 #include "components/ml/mojom/webnn_graph.mojom.h"
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
 #include "content/browser/ml/webnn/dml/utils_dml.h"
 
 namespace content::webnn {
@@ -42,10 +43,7 @@ class ReadbackHeap final {
   UINT64 outputs_resource_size_ = 0;
   std::map<std::string, MemoryInfo> outputs_info_map_;
   base::MappedReadOnlyRegion outputs_shm_region_;
-#ifdef ENABLE_GPU_MEMORY_MANAGEMENT
-#else
-  ComPtr<ID3D12Resource> readback_resource_;
-#endif
+  ComPtr<gpgmm::d3d12::ResourceAllocation> readback_resource_;
 };
 
 }  // namespace content::webnn

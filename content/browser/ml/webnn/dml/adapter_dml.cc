@@ -52,6 +52,11 @@ HRESULT AdapterDML::Initialize() {
   return hr;
 }
 
+ComPtr<IDXGIAdapter3> AdapterDML::GetHardwareAdapter() const {
+  DCHECK(hardware_adapter_.Get() != nullptr);
+  return hardware_adapter_;
+}
+
 AdapterType AdapterDML::GetAdapterType() {
   DCHECK(adapter_type_ != AdapterType::kUnknow);
   return adapter_type_;

@@ -16,6 +16,7 @@
 #define CONTENT_BROWSER_ML_WEBNN_DML_DMLUTILS_H_
 
 #include "base/logging.h"
+#include "components/ml/mojom/webnn_graph.mojom.h"
 
 #define WEBNN_CHECK(hr)                   \
   if (((HRESULT)(hr)) < 0) {              \
@@ -54,7 +55,8 @@ std::pair<size_t, T> Align(T& memory_info_map, UINT alignment) {
   return std::make_pair(aligned_offset, std::move(aligned_memory_info_map));
 }
 
-inline std::vector<UINT> ConvertDimensions(const std::vector<int32_t>& dimensions) {
+inline std::vector<UINT> ConvertDimensions(
+    const std::vector<int32_t>& dimensions) {
   std::vector<UINT> convertedDimensions;
   for (auto dim : dimensions) {
     if (dim < 0) {

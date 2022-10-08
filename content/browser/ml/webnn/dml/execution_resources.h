@@ -11,6 +11,9 @@
 
 #include "DirectML.h"
 
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
+#include "content/browser/ml/webnn/dml/utils_dml.h"
+
 namespace content::webnn {
 
 using Microsoft::WRL::ComPtr;
@@ -32,7 +35,7 @@ class ExecutionResources final {
   ~ExecutionResources();
 
   // Allocate a resource that is released by manually.
-  ComPtr<ID3D12Resource> Allocate(UINT64 resource_size);
+  ComPtr<gpgmm::d3d12::ResourceAllocation> Allocate(UINT64 resource_size);
   // Allocate a resource that is owned by a graph and reused for execution.
   ID3D12Resource* Allocate(ResourceType type,
                            UINT64 resource_size,
@@ -45,9 +48,10 @@ class ExecutionResources final {
  private:
   struct Resources {
     Resources();
-    Resources(ResourceType type, ComPtr<ID3D12Resource> resource);
+    Resources(ResourceType type, ComPtr<gpgmm::d3d12::ResourceAllocation> resource);
     ~Resources();
-    std::map<ResourceType, ComPtr<ID3D12Resource>> resources;
+
+    std::map<ResourceType, ComPtr<gpgmm::d3d12::ResourceAllocation>> resources;
   };
 
   ExecutionContext* execution_context_;

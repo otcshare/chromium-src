@@ -44,8 +44,8 @@ HRESULT ReadbackHeap::ReadbackResource(NamedOutputsPtr& named_outputs,
   // TODO:: Don't need add barrier to reset source resource from COPY_SOURCE
   // to UNORDERED_ACCESS?
   // Copy buffer from GPU resource to CPU data.
-  execution_context_->CopyBufferRegion(readback_resource_.Get(), src_resource,
-                                       outputs_resource_size_,
+  execution_context_->CopyBufferRegion(readback_resource_->GetResource(),
+                                       src_resource, outputs_resource_size_,
                                        D3D12_RESOURCE_STATE_COPY_SOURCE);
 
   execution_context_->Flush();
@@ -105,10 +105,13 @@ HRESULT ReadbackHeap::CreateReadbackResource(size_t byte_length) {
   resource_desc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
   resource_desc.Flags = D3D12_RESOURCE_FLAG_NONE;
 
-  HRESULT hr = execution_context_->GetD3D12Device()->CreateCommittedResource(
-      &heap_properties, D3D12_HEAP_FLAG_NONE, &resource_desc,
-      D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-      IID_PPV_ARGS(&readback_resource_));
+  gpgmm::d3d12::ALLOCATION_DESC allocation_descriptor = {};
+  allocation_descriptor.HeapType = D3D12_HEAP_TYPE_READBACK;
+
+  HRESULT hr = execution_context_->GetResourceAllocator()->CreateResource(
+      allocation_descriptor, resource_desc, D3D12_RESOURCE_STATE_COPY_DEST,
+      nullptr, &readback_resource_);
+
   if (FAILED(hr)) {
     return hr;
   }

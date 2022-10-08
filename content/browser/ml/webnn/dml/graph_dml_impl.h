@@ -18,6 +18,7 @@
 #include "base/memory/read_only_shared_memory_region.h"
 #include "base/memory/shared_memory_mapping.h"
 #include "components/ml/mojom/webnn_graph.mojom.h"
+#include "content/browser/ml/webnn/dml/gpgmm_d3d12.h"
 #include "content/browser/ml/webnn/dml/graph_desc_builder.h"
 #include "content/browser/ml/webnn/dml/graph_node_output.h"
 #include "content/browser/ml/webnn/dml/readback_heap.h"

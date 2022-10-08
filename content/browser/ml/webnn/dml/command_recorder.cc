@@ -4,15 +4,19 @@
 
 #include "content/browser/ml/webnn/dml/command_recorder.h"
 
+#include "content/browser/ml/webnn/dml/adapter_dml.h"
 #include "content/browser/ml/webnn/dml/execution_resources.h"
 
 namespace content::webnn {
 
 CommandRecorder::~CommandRecorder() = default;
 
-CommandRecorder::CommandRecorder(ComPtr<IDMLDevice> dml_device,
+CommandRecorder::CommandRecorder(scoped_refptr<AdapterDML> adapter,
+                                 ComPtr<IDMLDevice> dml_device,
                                  ComPtr<ID3D12CommandQueue> command_queue)
-    : dml_device_(dml_device), command_queue_(command_queue) {}
+    : adapter_(std::move(adapter)),
+      dml_device_(std::move(dml_device)),
+      command_queue_(std::move(command_queue)) {}
 
 void CommandRecorder::ResourceBarrier(
     std::vector<const D3D12_RESOURCE_BARRIER> barriers) {
@@ -56,6 +60,24 @@ HRESULT CommandRecorder::Initialize() {
   if (FAILED(hr)) {
     return hr;
   }
+
+  D3D12_FEATURE_DATA_D3D12_OPTIONS options = {};
+  hr = d3d12_device_->CheckFeatureSupport(D3D12_FEATURE_D3D12_OPTIONS, &options,
+                                          sizeof(options));
+  if (FAILED(hr)) {
+    return hr;
+  }
+  gpgmm::d3d12::ALLOCATOR_DESC allocatorDesc = {};
+  allocatorDesc.Adapter = adapter_->GetHardwareAdapter();
+  allocatorDesc.Device = d3d12_device_;
+  allocatorDesc.ResourceHeapTier = options.ResourceHeapTier;
+  // TODO: Enable residency management.
+  hr = gpgmm::d3d12::ResourceAllocator::CreateAllocator(allocatorDesc,
+                                                        &resource_allocator_);
+  if (FAILED(hr)) {
+    return hr;
+  }
+
   return S_OK;
 }
 
@@ -231,6 +253,11 @@ ComPtr<ID3D12GraphicsCommandList> CommandRecorder::GetCommandList() {
 
 ComPtr<IDMLDevice> CommandRecorder::GetDMLDevice() {
   return dml_device_;
+}
+
+ComPtr<gpgmm::d3d12::ResourceAllocator>
+CommandRecorder::GetResourceAllocator() {
+  return resource_allocator_;
 }
 
 }  // namespace content::webnn
