@@ -25,7 +25,7 @@ error() {
 }
 trap 'error ${LINENO}' ERR
 
-INTEL_OPENVINO_DIR="/opt/intel/openvino"
+INTEL_OPENVINO_DIR="/opt/intel/openvino_2021"
 CURRENT_PATH="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 printf "\n$CURRENT_PATH\n"

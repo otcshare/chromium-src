@@ -17,7 +17,7 @@
 
 @setlocal
 SETLOCAL EnableDelayedExpansion
-set "OPENVINO_DIR=%ProgramFiles(x86)%\IntelSWTools\openvino"
+set "OPENVINO_DIR=%ProgramFiles(x86)%\IntelSWTools\openvino_2021"
 set "ROOT_DIR=%~dp0"
 set "DISK_SYMBOL=%~d0"
 ::FOR /F "delims=\" %%i IN ("%ROOT_DIR%") DO set SAMPLES_TYPE=%%~nxi
